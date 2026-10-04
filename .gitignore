@@ -1,0 +1,5 @@
+venv/
+__pycache__/
+*.py[cod]
+evaluation/dataset/transformed/salt_pepper.mp4
+evaluation/dataset/transformed/moderate_noise.mp4
