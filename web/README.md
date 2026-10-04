@@ -1,36 +1,33 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# CloudDash Dashcam Assurance
 
-## Getting Started
+A browser-based dashcam evidence workflow with local video capture, signed segment fingerprints, protected incident storage, and insurer verification.
 
-First, run the development server:
+## Secure workflow
+
+1. Configure Supabase Auth and the public project URL/key in the deployment environment (`SUPABASE_URL` and `SUPABASE_KEY`, or the corresponding `NEXT_PUBLIC_SUPABASE_*` publishable/anon variables). Never expose `SUPABASE_SECRET_KEY` or a service-role key to the browser.
+2. Apply [`../supabase/migrations/20261004000000_secure_evidence_workflow.sql`](../supabase/migrations/20261004000000_secure_evidence_workflow.sql) to the Supabase project. It creates the workspace tables, row-level policies, private incident bucket, and Realtime publication entries while leaving the legacy Streamlit table intact.
+3. Sign up or sign in. The first authenticated session creates a private workspace. The browser stores the device signing key and ordinary video segments in IndexedDB; only signed fingerprints are sent to the workspace. Video is uploaded only for incident clips that the driver locks.
+
+The existing Vercel project can deploy this Next.js app from `web/`. Add the Supabase URL and **publishable/anon** key to the Vercel project environment, then redeploy. `SUPABASE_SECRET_KEY` may remain server-side for the legacy Streamlit application; the web app deliberately never returns it from `/api/config`.
+
+## Encoder / transmitter
+
+Camera or synthetic-road recording is split into configurable segments. Each segment is SHA-256 hashed, linked to its session chain, signed with the browser device’s ECDSA P-256 key, and saved locally before transmission. The IndexedDB outbox retains unacknowledged segments and retries without changing IDs or signatures. The driver can simulate an outage, lock an incident with pre/post-roll, manage local retention, and export original video plus its signed manifest.
+
+## Decoder / insurer
+
+Authorized workspace members can inspect a live fingerprint stream, retrieve protected incident videos, verify exact file bytes, validate the device signature and complete session chain, compare altered or re-encoded videos using temporal perceptual fingerprints, and review/export audit and verification history. Similarity is a review lead only; it never turns an exact-integrity failure into a verified result. The evaluation lab supports pHash, aHash, dHash, wHash, threshold calibration, confusion metrics, and CSV export.
+
+## Development
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Production checks:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```bash
+npm run lint
+npm run build
+```

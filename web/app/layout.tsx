@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "DriveProof | Dashcam Assurance",
-  description: "Capture and verify dashcam evidence with SHA-256 frame fingerprints.",
+  title: "CloudDash | Secure Dashcam Evidence",
+  description: "Capture, sign, transmit, and verify dashcam evidence with a traceable chain of custody.",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

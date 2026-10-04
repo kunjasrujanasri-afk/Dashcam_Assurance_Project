@@ -1,14 +1,9 @@
 import { NextResponse } from "next/server";
-import { getSupabase } from "@/lib/supabase";
 
-export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 export async function GET() {
-  try {
-    const { error } = await getSupabase().from("fingerprints").select("id", { count: "exact", head: true });
-    if (error) throw error;
-    return NextResponse.json({ status: "ok" });
-  } catch {
-    return NextResponse.json({ status: "unavailable" }, { status: 503 });
-  }
+  const configured = Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL)
+    && Boolean(process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? process.env.SUPABASE_PUBLISHABLE_KEY ?? process.env.SUPABASE_KEY);
+  return NextResponse.json({ status: configured ? "configured" : "unavailable" }, { status: configured ? 200 : 503 });
 }
