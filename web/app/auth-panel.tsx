@@ -33,6 +33,6 @@ export function AuthPanel({ client, onPublicDemo }: { client: SupabaseClient | n
     {message && <div className="result-message">{message}</div>}
     <button className="auth-switch" onClick={() => { setMode(mode === "sign-in" ? "sign-up" : "sign-in"); setMessage(""); }}>{mode === "sign-in" ? "New here? Create an account" : "Already registered? Sign in"}</button>
     <button className="auth-demo" onClick={onPublicDemo}>Continue to local-only demo</button>
-    <small>Videos are processed on your device. Secure cloud access uses Supabase workspace roles and row-level security.</small>
+    <small>The first account created in a workspace becomes its administrator. Sign in with your own email and password; there is no shared admin login. Videos are processed on your device, and Supabase workspace roles protect cloud records.</small>
   </section></div>;
 }
