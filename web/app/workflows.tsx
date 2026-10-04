@@ -2,9 +2,9 @@
 
 import { ChangeEvent, useCallback, useEffect, useMemo, useState } from "react";
 import type { SupabaseClient, User } from "@supabase/supabase-js";
-import { addLocalAttempt, getSegment, listLocalAttempts, listOutbox, removeLocalAttempt, removeOutbox, updateOutbox, putSegment, type LocalSegment, type VerificationAttempt } from "@/lib/local-vault";
+import { addLocalAttempt, getSegment, listLocalAttempts, listOutbox, listSegments, loadKeyPair, removeLocalAttempt, removeOutbox, updateOutbox, putSegment, type LocalSegment, type VerificationAttempt } from "@/lib/local-vault";
 import { alignVideos, confusion, hashMethodScores, type HashMethod } from "@/lib/video-matching";
-import { extractPerceptual, parseFingerprintFile, sha256, verifyChain, verifySignature, type SignedFingerprint } from "@/lib/signed-evidence";
+import { canonicalChainPayload, extractPerceptual, parseFingerprintFile, sha256, verifyChain, verifySignature, type SignedFingerprint } from "@/lib/signed-evidence";
 import { downloadProtectedSegment, ensureCaptureSession, fetchWorkspaceFingerprints, listIncidents, loadAuditEvents, loadVerificationHistory, logAuditEvent, logVerification, prepareIdentity, subscribeWorkspace, transmitFingerprint, uploadProtectedSegment } from "@/lib/secure-store";
 
 type BaseProps = { client: SupabaseClient; user: User; workspaceId: string; notify: (message: string) => void };
@@ -26,7 +26,7 @@ function deviceKey(row: Record<string, unknown>): JsonWebKey | null {
 function saveFile(name: string, content: string, type = "application/json") {
   const url = URL.createObjectURL(new Blob([content], { type })), anchor = document.createElement("a"); anchor.href = url; anchor.download = name; anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
-function ResultBadge({ value }: { value: string }) { return <span className={`status-pill ${value === "VERIFIED" || value === "CONTENT_MATCH" ? "success" : value === "ERROR" ? "neutral" : "warning"}`}>{value}</span>; }
+function ResultBadge({ value }: { value: string }) { return <span className={`status-pill ${["VERIFIED", "VERIFIED_LOCAL", "MANIFEST_VERIFIED", "CONTENT_MATCH"].includes(value) ? "success" : value === "ERROR" ? "neutral" : "warning"}`}>{value}</span>; }
 
 export function LiveMonitor({ client, workspaceId, notify }: BaseProps) {
   const [records, setRecords] = useState<Array<Record<string, unknown>>>([]), [incidents, setIncidents] = useState<Array<Record<string, unknown>>>([]), [state, setState] = useState("connecting"), [loading, setLoading] = useState(false);
@@ -81,7 +81,40 @@ export function EvidenceDecoder({ client, user, workspaceId, notify }: BaseProps
       }
       const evidenceId = manifestValue?.evidence?.segmentId ?? referenceId;
       const cloudRow = references.find(row => row.segment_id === evidenceId) ?? null;
-      if (!cloudRow) { status = "FINGERPRINT_NOT_FOUND"; details = { calculatedHash: calculated, referenceSegment: evidenceId || null }; }
+      if (!cloudRow && manifestValue?.evidence) {
+        const evidence = manifestValue.evidence;
+        const exactMatch = calculated === evidence.sha256 && file.size === evidence.bytes;
+        if (!exactMatch) {
+          status = "FILE_HASH_MISMATCH";
+          details = { calculatedHash: calculated, expectedHash: evidence.sha256, bytes: file.size, expectedBytes: evidence.bytes, segmentId: evidence.segmentId, trust: "manifest" };
+        } else {
+          const chainHashValid = await sha256(canonicalChainPayload(evidence)) === evidence.chainHash;
+          const local = await getSegment(evidence.segmentId);
+          const localKeys = await loadKeyPair(evidence.deviceId);
+          const publicKey = localKeys?.publicJwk ?? manifestValue.devicePublicKey;
+          const signatureValid = Boolean(publicKey && await verifySignature(evidence, publicKey));
+          const localBytesMatch = Boolean(local && local.blob.size === file.size && await sha256(local.blob) === calculated);
+          let localChainStatus: string | null = null;
+          if (local && localKeys && localBytesMatch) {
+            const sequence = (await listSegments(evidence.deviceId))
+              .filter(segment => segment.sessionId === evidence.sessionId && segment.sequence <= evidence.sequence)
+              .map(segment => segment.fingerprint);
+            const checkedChain = await verifyChain(sequence);
+            localChainStatus = checkedChain.valid && sequence.some(record => record.segmentId === evidence.segmentId) ? "VERIFIED" : checkedChain.status;
+          }
+          if (!chainHashValid) status = "BROKEN_CHAIN";
+          else if (!signatureValid) status = "INVALID_SIGNATURE";
+          else if (local && !localBytesMatch) status = "FILE_HASH_MISMATCH";
+          else status = localChainStatus === "VERIFIED" ? "VERIFIED_LOCAL" : "MANIFEST_VERIFIED";
+          details = {
+            calculatedHash: calculated, expectedHash: evidence.sha256, bytes: file.size, expectedBytes: evidence.bytes,
+            segmentId: evidence.segmentId, sessionId: evidence.sessionId, sequence: evidence.sequence,
+            trust: localChainStatus === "VERIFIED" ? "local signed capture and complete session chain" : "self-contained signed manifest",
+            localCaptureFound: Boolean(local), localChainStatus,
+            limitation: localChainStatus === "VERIFIED" ? null : "No matching cloud fingerprint or complete local chain was available. The included public key validates the manifest signature but does not independently establish who issued that key.",
+          };
+        }
+      } else if (!cloudRow) { status = "FINGERPRINT_NOT_FOUND"; details = { calculatedHash: calculated, referenceSegment: evidenceId || null }; }
       else {
         const trusted = fromRow(cloudRow), publicKey = deviceKey(cloudRow) ?? manifestValue?.devicePublicKey ?? null;
         const videoMatches = calculated === trusted.sha256 && file.size === trusted.bytes;
@@ -111,7 +144,7 @@ export function EvidenceDecoder({ client, user, workspaceId, notify }: BaseProps
         if (parsed.fingerprints.includes(calculated) && status === "FINGERPRINT_NOT_FOUND") status = "LEGACY_MATCH_REVIEW";
       }
       setProgress(90); await persistAttempt(status, file.name, details); setResult({ status, details, name: file.name });
-      if (["VERIFIED", "FILE_HASH_MISMATCH", "CONTENT_MATCH", "INVALID_SIGNATURE", "BROKEN_CHAIN", "MISSING_SEQUENCE", "SESSION_MISMATCH", "DEVICE_MISMATCH", "FINGERPRINT_NOT_FOUND", "INVALID_MANIFEST", "LEGACY_MATCH_REVIEW"].includes(status)) {
+      if (["VERIFIED", "VERIFIED_LOCAL", "MANIFEST_VERIFIED", "FILE_HASH_MISMATCH", "CONTENT_MATCH", "INVALID_SIGNATURE", "BROKEN_CHAIN", "MISSING_SEQUENCE", "SESSION_MISMATCH", "DEVICE_MISMATCH", "FINGERPRINT_NOT_FOUND", "INVALID_MANIFEST", "LEGACY_MATCH_REVIEW"].includes(status)) {
         await logAuditEvent(client, workspaceId, user.id, "video_verification", file.name, { status, segmentId: details.segmentId ?? null });
       }
     } catch (error) {
@@ -147,7 +180,7 @@ export function EvidenceDecoder({ client, user, workspaceId, notify }: BaseProps
       {file && <div className="file-summary"><b>{file.name}</b><span>{bytes(file.size)}</span></div>}
       {busy && <div className="progress-wrap"><div><span>Hashing and checking chain</span><span>{progress}%</span></div><div className="progress-track"><i style={{ width: `${progress}%` }} /></div></div>}
       <button className="button button-primary" onClick={() => void verify()} disabled={!file || busy}>{busy ? "Verifying…" : "Verify exact integrity"}</button>
-      {result && <section className={`verification-result ${result.status === "VERIFIED" ? "verified" : result.status === "CONTENT_MATCH" ? "review" : "failed"}`}><div className="panel-heading"><div><p className="eyebrow">RESULT · {result.name}</p><h3>{result.status}</h3></div><ResultBadge value={result.status} /></div><p>{resultExplanation(result.status)}</p><details><summary>Technical details</summary><pre>{JSON.stringify(result.details, null, 2)}</pre></details></section>}
+      {result && <section className={`verification-result ${["VERIFIED", "VERIFIED_LOCAL", "MANIFEST_VERIFIED"].includes(result.status) ? "verified" : result.status === "CONTENT_MATCH" ? "review" : "failed"}`}><div className="panel-heading"><div><p className="eyebrow">RESULT · {result.name}</p><h3>{result.status}</h3></div><ResultBadge value={result.status} /></div><p>{resultExplanation(result.status)}</p><details><summary>Technical details</summary><pre>{JSON.stringify(result.details, null, 2)}</pre></details></section>}
     </section>
     <section className="panel"><div className="panel-heading"><div><h2>Protected incident videos</h2><p>Authorized workspace members can retrieve, replay, and verify privately stored incident clips.</p></div></div><div className="table-scroll"><table><thead><tr><th>Incident</th><th>Segment</th><th>Size</th><th>Protected object</th><th></th></tr></thead><tbody>{protectedVideos.map(row => <tr key={String(row.id)}><td>{String(row.incidentTitle)}</td><td>{String(row.sequence)}</td><td>{bytes(Number(row.bytes))}</td><td><code>{String(row.storage_path)}</code></td><td><button className="text-action" onClick={() => void retrieveProtected(row)}>Retrieve &amp; verify</button></td></tr>)}{!protectedVideos.length && <tr><td colSpan={5} className="empty-state">No protected video is stored. Lock an incident in Driver capture to preserve clips here.</td></tr>}</tbody></table></div></section>
   </div>;
@@ -156,6 +189,8 @@ export function EvidenceDecoder({ client, user, workspaceId, notify }: BaseProps
 function resultExplanation(status: string) {
   const copy: Record<string, string> = {
     VERIFIED: "Exact file bytes match a trusted cloud fingerprint. The device signature and complete ordered session hash chain are valid.",
+    VERIFIED_LOCAL: "Exact file bytes, the saved device signature, and the complete local session chain match. No cloud fingerprint was available for this check.",
+    MANIFEST_VERIFIED: "The video digest, chain hash, and signature match the supplied manifest. Without a cloud record or complete local capture chain, the manifest’s included public key is not an independent identity anchor.",
     FILE_HASH_MISMATCH: "The supplied file differs byte-for-byte from the trusted recording. Perceptual similarity cannot make it authentic.",
     CONTENT_MATCH: "Some visual frames align with the trusted video, but the file hash differs. This is a review lead, not a verified result.",
     FINGERPRINT_NOT_FOUND: "No matching trusted cloud fingerprint was found. The file cannot be authenticated from this workspace.",
@@ -193,7 +228,7 @@ export function VerificationHistory({ client, user, workspaceId, notify }: BaseP
     for (const row of local) if (!rows.has(row.id)) rows.set(row.id, { id: row.id, kind: row.kind, status: row.status, name: row.name, details: row.details, created_at: row.createdAt, localOnly: true });
     return [...rows.values()].sort((a, b) => Date.parse(String(b.created_at)) - Date.parse(String(a.created_at)));
   }, [cloud, local]);
-  const exactChecks = merged.filter(row => row.kind === "video" && row.status !== "ERROR"), verified = exactChecks.filter(row => row.status === "VERIFIED").length, errors = merged.filter(row => row.status === "ERROR").length;
+  const exactChecks = merged.filter(row => row.kind === "video" && row.status !== "ERROR" && row.status !== "MANIFEST_VERIFIED"), verified = exactChecks.filter(row => row.status === "VERIFIED" || row.status === "VERIFIED_LOCAL").length, errors = merged.filter(row => row.status === "ERROR").length;
   const visible = merged.filter(row => filter === "all" || (filter === "passed" ? row.status === "VERIFIED" : filter === "errors" ? row.status === "ERROR" : row.status !== "VERIFIED" && row.status !== "ERROR"));
   const exportLog = () => saveFile("dashcam-integrity-history.json", JSON.stringify({ exportedAt: new Date().toISOString(), exactVideoPassRate: exactChecks.length ? verified / exactChecks.length : null, attempts: merged, auditEvents: audit }, null, 2));
   return <div className="module-stack"><div className="module-title"><div><p className="eyebrow">AUDIT &amp; RELIABILITY</p><h1>Integrity &amp; history</h1><p>Each result explains what failed and keeps a durable local outbox through network interruptions.</p></div><div className="button-row compact"><button className="button button-neutral" onClick={() => void refresh()} disabled={busy}>{busy ? "Refreshing…" : "Refresh log"}</button><button className="button button-primary" onClick={exportLog}>Export full log</button></div></div>

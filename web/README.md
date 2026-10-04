@@ -1,4 +1,4 @@
-# CloudDash Dashcam Assurance
+# Dashcam Assurance
 
 A browser-based dashcam evidence workflow with local video capture, signed segment fingerprints, protected incident storage, and insurer verification.
 

@@ -190,10 +190,10 @@ export function DriverCapture({ client, user, workspaceId, notify }: { client: S
       }
       streamRef.current = stream;
       if (videoRef.current) { videoRef.current.srcObject = stream; await videoRef.current.play().catch(() => undefined); }
+      await startCaptureSession(client, prepared, session.id, session.startedAt);
       recordingRef.current = true; setRecording(true); setMessage("Capture session started. Each segment is signed and saved locally before transmission.");
       persistBlobRef.current = persistBlob; beginRecorderRef.current = beginRecorder;
       beginRecorder(stream); segmentTimerRef.current = window.setTimeout(() => recorderRef.current?.state === "recording" && recorderRef.current.stop(), segmentLength * 1000);
-      void startCaptureSession(client, prepared, session.id, session.startedAt).catch(() => undefined);
     } catch (error) {
       recordingRef.current = false; setRecording(false); streamRef.current?.getTracks().forEach(track => track.stop()); streamRef.current = null; animationRef.current?.(); animationRef.current = null; sessionRef.current = null; setActiveSession(null);
       setMessage(error instanceof Error ? error.message : "Could not start dashcam recording.");

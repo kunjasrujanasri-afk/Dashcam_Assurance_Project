@@ -36,10 +36,10 @@ export async function prepareIdentity(client: SupabaseClient, user: User): Promi
     const workspaceId = await bootstrapWorkspace(client);
     let deviceId = cachedDevice || crypto.randomUUID();
     let keys = await loadKeyPair(deviceId);
-    const { data: initialDevice, error } = await client.from("devices").select("id,public_key").eq("id", deviceId).maybeSingle();
+    const { data: initialDevice, error } = await client.from("devices").select("id,public_key,workspace_id,owner_id").eq("id", deviceId).maybeSingle();
     let existing = initialDevice;
     dbError(error, "Could not check the registered signing device");
-    if (existing && (!keys || JSON.stringify(existing.public_key) !== JSON.stringify(keys.publicJwk))) {
+    if (existing && (!keys || JSON.stringify(existing.public_key) !== JSON.stringify(keys.publicJwk) || existing.workspace_id !== workspaceId || existing.owner_id !== user.id)) {
       deviceId = crypto.randomUUID(); keys = undefined; existing = null;
     }
     if (!keys) {
