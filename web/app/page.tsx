@@ -48,7 +48,7 @@ export default function Home() {
   return <div className="app-shell">
     <header className="app-header">
       <button className="app-brand" onClick={() => { setDemo(false); setPage("Driver capture"); }} aria-label="Dashcam Assurance home">
-        <span className="app-brand-icon"><span>●</span><i>↗</i></span>
+        <span className="app-brand-icon"><span>✓</span></span>
         <span className="app-brand-copy"><strong>Dashcam Assurance</strong><small>Digital Evidence Integrity Platform</small></span>
       </button>
       <nav className="top-nav" aria-label="Main navigation">{tabs.map(tab => <button key={tab.page} className={`top-nav-tab ${page === tab.page ? "active" : ""}`} onClick={() => setPage(tab.page)}><span>{tab.mark}</span>{tab.page}</button>)}</nav>
