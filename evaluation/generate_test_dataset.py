@@ -4,10 +4,16 @@ import shutil
 import subprocess
 import numpy as np
 from pathlib import Path
+import random
+import json
+import hashlib
+from fractions import Fraction
 
 
 SOURCE = "videos/dashcam_test.mp4"
 OUTPUT = "evaluation/dataset"
+RANDOM_SEED = 20261004
+OTHER_TRIP_SOURCE = "synthetic test video"
 
 
 def create_folders():
@@ -452,21 +458,14 @@ def run_ffmpeg(
     command.append(output_path)
 
     try:
-
-        subprocess.run(
-            command,
-            check=True
-        )
+        if shutil.which("ffmpeg"):
+            subprocess.run(command, check=True)
+        else:
+            create_transcoded_video(output_path, output_name)
 
         print(
             "Created:",
             output_path
-        )
-
-    except FileNotFoundError:
-
-        print(
-            "FFmpeg not found."
         )
 
     except subprocess.CalledProcessError:
@@ -475,6 +474,70 @@ def run_ffmpeg(
             "FFmpeg failed:",
             output_name
         )
+
+    except Exception as exc:
+        print(f"Codec scenario unavailable ({output_name}): {exc}")
+
+
+def create_transcoded_video(output_path, output_name):
+    """PyAV fallback for common FFmpeg scenarios, using installed codec support."""
+    import av
+
+    name = output_name.lower()
+    codec = "libx265" if "h265" in name or "hevc" in name else "libx264"
+    options = {}
+    bitrate = None
+    scale = 1.0
+    target_fps = None
+    watermark = "watermark" in name
+    if "low_bitrate" in name: bitrate = 500_000
+    elif "high_compression" in name: options["crf"] = "38"
+    elif "reencoded" in name: options["crf"] = "28"
+    elif "h265" in name: options["crf"] = "30"
+    elif "resolution_half" in name: scale = .5
+    elif "fps_15" in name: target_fps = 15
+    elif "fps_60" in name: target_fps = 60
+
+    source = av.open(str(SOURCE))
+    input_stream = next((stream for stream in source.streams if stream.type == "video"), None)
+    if input_stream is None:
+        source.close()
+        raise RuntimeError("The source has no video stream.")
+    source_fps = float(input_stream.average_rate or 30)
+    fps = target_fps or max(1, round(source_fps))
+    width = max(2, int(input_stream.width * scale) // 2 * 2)
+    height = max(2, int(input_stream.height * scale) // 2 * 2)
+    output = av.open(str(output_path), mode="w", format="mp4")
+    stream = output.add_stream(codec, rate=fps)
+    stream.width, stream.height, stream.pix_fmt = width, height, "yuv420p"
+    if bitrate is not None:
+        stream.bit_rate = bitrate
+    stream.options = options
+    stream.time_base = Fraction(1, fps)
+    output_index = 0
+    try:
+        for input_index, decoded in enumerate(source.decode(input_stream)):
+            # Nearest-frame rate conversion, deterministic with no interpolation.
+            target_count = round((input_index + 1) * fps / source_fps)
+            while output_index < target_count:
+                frame = decoded
+                if (frame.width, frame.height) != (width, height):
+                    frame = frame.reformat(width=width, height=height)
+                if watermark:
+                    image = frame.to_ndarray(format="bgr24")
+                    cv2.putText(image, "TEST-WATERMARK", (20, 42), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                    frame = av.VideoFrame.from_ndarray(image, format="bgr24")
+                frame = frame.reformat(format="yuv420p")
+                frame.pts = output_index
+                frame.time_base = Fraction(1, fps)
+                for packet in stream.encode(frame): output.mux(packet)
+                output_index += 1
+        for packet in stream.encode(): output.mux(packet)
+    finally:
+        source.close(); output.close()
+    if not Path(output_path).exists() or Path(output_path).stat().st_size == 0:
+        raise RuntimeError("Encoder did not create a playable output.")
+    print("Created with PyAV:", output_path)
 
 
 
@@ -551,7 +614,125 @@ def create_reordered_video(input_path, output_path):
     for frame in frames: writer.write(frame)
     writer.release(); print("Created:",output_path)
 
+
+def create_end_trimmed_video(output_path, trim_seconds=3):
+    """Create a clip with its ending removed (leave the beginning intact)."""
+    cap = cv2.VideoCapture(SOURCE)
+    if not cap.isOpened():
+        raise RuntimeError(f"Could not open source video: {SOURCE}")
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    cap.release()
+    duration = frame_count / fps
+    if duration <= trim_seconds + 1:
+        raise ValueError("Source video is too short for end trimming.")
+    create_trimmed_video(output_path, 0, duration - trim_seconds)
+
+
+def create_synthetic_other_trip(output_path, seconds=8, fps=15):
+    """Make a deterministic, visibly distinct test scene without outside data."""
+    width, height = 640, 360
+    writer = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height))
+    if not writer.isOpened():
+        raise RuntimeError(f"Could not create synthetic test video: {output_path}")
+    rng = np.random.default_rng(RANDOM_SEED)
+    for index in range(seconds * fps):
+        frame = np.zeros((height, width, 3), dtype=np.uint8)
+        frame[:] = (30, 45, 100)
+        cv2.rectangle(frame, (0, 220), (width, height), (45, 95, 40), -1)
+        x = int((index * 9) % (width + 120)) - 60
+        cv2.rectangle(frame, (x, 120), (x + 120, 235), (int(rng.integers(80, 240)), 90, 30), -1)
+        cv2.putText(frame, "SYNTHETIC OTHER TRIP", (24, 45), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+        cv2.putText(frame, f"TEST FRAME {index:04d}", (24, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (210, 230, 255), 1)
+        writer.write(frame)
+    writer.release()
+
+
+def create_partially_modified_video(output_path, other_path):
+    """Keep most original frames but replace the central 30% with another scene."""
+    primary = cv2.VideoCapture(SOURCE)
+    secondary = cv2.VideoCapture(other_path)
+    if not primary.isOpened() or not secondary.isOpened():
+        primary.release(); secondary.release()
+        raise RuntimeError("Could not open source(s) for partial modification.")
+    fps = primary.get(cv2.CAP_PROP_FPS) or 30.0
+    width = int(primary.get(cv2.CAP_PROP_FRAME_WIDTH)); height = int(primary.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    total = int(primary.get(cv2.CAP_PROP_FRAME_COUNT))
+    start, end = int(total * .35), int(total * .65)
+    writer = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height))
+    if not writer.isOpened():
+        primary.release(); secondary.release()
+        raise RuntimeError(f"Could not create partial video: {output_path}")
+    index = 0
+    while True:
+        ok, frame = primary.read()
+        if not ok: break
+        if start <= index < end:
+            other_ok, replacement = secondary.read()
+            if other_ok:
+                frame = cv2.resize(replacement, (width, height))
+            else:
+                # If the secondary clip ends, apply an obvious reproducible alteration.
+                frame = cv2.convertScaleAbs(frame, alpha=.35, beta=80)
+        writer.write(frame)
+        index += 1
+    primary.release(); secondary.release(); writer.release()
+    if index == 0:
+        raise RuntimeError("No source frames were read for partial modification.")
+
+
+def find_distinct_trip_source():
+    """Prefer another valid local trip; ignore byte-identical opening frames."""
+    source_path = Path(SOURCE).resolve()
+    source = cv2.VideoCapture(str(source_path))
+    ok, source_frame = source.read() if source.isOpened() else (False, None)
+    source.release()
+    if not ok:
+        return None
+    source_digest = hashlib.sha256(source_frame.tobytes()).digest()
+    for candidate in sorted(Path("videos").glob("*.mp4")):
+        if candidate.resolve() == source_path:
+            continue
+        cap = cv2.VideoCapture(str(candidate))
+        valid, frame = cap.read() if cap.isOpened() else (False, None)
+        cap.release()
+        if valid and hashlib.sha256(frame.tobytes()).digest() != source_digest:
+            return candidate
+    return None
+
+
+def write_manifest():
+    """Record which generated files exist and how synthetic trips were sourced."""
+    scenarios = []
+    for path in sorted(Path(OUTPUT).rglob("*.mp4")):
+        if path.name == "authentic.mp4":
+            continue
+        rel = path.relative_to(OUTPUT).as_posix()
+        lower = path.stem.lower()
+        category = ("another_trip" if "other_trip" in lower else
+                    "partially_modified" if "partially_modified" in lower else
+                    "end_trimmed" if "trimmed_end" in lower else
+                    "missing_frames" if "missing" in lower else
+                    "modified" if any(x in lower for x in ("noise", "watermark", "modified")) else
+                    "transformed" if path.parent.name == "transformed" else "temporal")
+        scenarios.append({"file": rel, "category": category})
+    manifest = {
+        "format_version": 1,
+        "reference": "authentic/authentic.mp4",
+        "source": str(Path(SOURCE).as_posix()),
+        "random_seed": RANDOM_SEED,
+        "other_trip_source": OTHER_TRIP_SOURCE,
+        "scenarios": scenarios,
+        "limitations": ["The synthetic other-trip clip is not real dashcam footage.", "Optional FFmpeg codec cases are absent when their encoder is unavailable."],
+    }
+    Path(OUTPUT, "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
 def main():
+
+    global OTHER_TRIP_SOURCE
+
+    random.seed(RANDOM_SEED)
+    np.random.seed(RANDOM_SEED)
 
     create_folders()
 
@@ -569,6 +750,8 @@ def main():
         3,
         10
     )
+
+    create_end_trimmed_video(os.path.join(OUTPUT, "temporal", "trimmed_end.mp4"))
 
     create_trimmed_video(
         os.path.join(
@@ -588,6 +771,18 @@ def main():
     create_speed_video(SOURCE,os.path.join(temporal_dir,"faster_playback.mp4"),1.1)
     create_fps_video(SOURCE,os.path.join(temporal_dir,"different_fps_15.mp4"),15)
     create_reordered_video(SOURCE,os.path.join(temporal_dir,"reordered_frames.mp4"))
+
+    print("\nCreating other-trip and partially modified scenarios...")
+    other_path = os.path.join(OUTPUT, "other", "other_trip_synthetic.mp4")
+    os.makedirs(os.path.dirname(other_path), exist_ok=True)
+    trip_source = find_distinct_trip_source()
+    if trip_source:
+        shutil.copy2(trip_source, other_path)
+        OTHER_TRIP_SOURCE = str(trip_source)
+        print("Using distinct local trip as other-trip scenario:", trip_source)
+    else:
+        create_synthetic_other_trip(other_path)
+    create_partially_modified_video(os.path.join(OUTPUT, "transformed", "partially_modified.mp4"), other_path)
 
     print("\nCreating transformation videos...")
 
@@ -746,6 +941,8 @@ def main():
         "Location:",
         os.path.abspath(OUTPUT)
     )
+
+    write_manifest()
 
 
 if __name__ == "__main__":

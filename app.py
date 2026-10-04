@@ -10,6 +10,10 @@ from datetime import datetime, timedelta
 import streamlit as st
 from dotenv import load_dotenv
 from supabase import create_client
+from database.evidence_store import (
+    enqueue_records, load_fingerprint_txt, mark_sent, pending_records,
+    queue_size, record_failure, save_fingerprint_txt,
+)
 
 from aiortc.contrib.media import MediaRecorder
 from streamlit_webrtc import (
@@ -26,6 +30,7 @@ from evaluation.evaluation_engine import (
     phash,
     whash,
 )
+from decoder.integrity import verify_hash_sequence
 
 
 # ============================================================
@@ -60,6 +65,7 @@ st.set_page_config(
 
 # No default evidence is selected automatically.
 LOCAL_FINGERPRINT_FILE = DATABASE_DIR / "fingerprints.txt"
+LOCAL_QUEUE_DB = DATABASE_DIR / "transmission_queue.sqlite3"
 
 
 # ============================================================
@@ -801,6 +807,20 @@ def hash_frame(frame):
     ).hexdigest()
 
 
+def recommended_threshold(method_name):
+    """Use measured benchmark thresholds when present, with an explicit provisional fallback."""
+    result_file = BASE_DIR / "evaluation" / "results" / "threshold_results.csv"
+    if result_file.exists():
+        try:
+            table = pd.read_csv(result_file)
+            selected = table[(table["metric"] == method_name) & (table["recommended"].astype(str).str.lower() == "true")]
+            if not selected.empty:
+                return float(selected.iloc[0]["threshold"]), "dataset evaluation"
+        except (OSError, ValueError, KeyError):
+            pass
+    return 70.0, "provisional default; run the dataset benchmark to calibrate"
+
+
 def get_video_information(video_path):
 
     if not video_path:
@@ -917,6 +937,8 @@ def create_report(
     missing,
     integrity,
     status,
+    evidence_source="Supabase",
+    anomaly_summary=None,
 ):
 
     verification_time = datetime.now().strftime(
@@ -930,6 +952,7 @@ Verification Time: {verification_time}
 Driver ID: {driver_id}
 Video Name: {video_name}
 Fingerprint Algorithm: SHA-256
+Evidence Source: {evidence_source}
 
 Frames Checked: {frames_checked}
 Verified Frames: {verified}
@@ -937,6 +960,7 @@ Corrupted Frames: {corrupted}
 Missing Frames: {missing}
 Integrity: {integrity:.2f}%
 Status: {status}
+Anomalies: {anomaly_summary or "None"}
 
 Verification completed successfully.
 """.strip()
@@ -947,42 +971,45 @@ def save_local_fingerprints(
     video_name,
 ):
 
-    output_file = (
-        DATABASE_DIR /
-        f"{Path(video_name).stem}_fingerprints.txt"
-    )
-
-    with open(
-        output_file,
-        "w",
-        encoding="utf-8",
-    ) as file:
-
-        file.write(
-            "DASHCAM ASSURANCE FINGERPRINT DATABASE\n"
-        )
-
-        file.write(
-            f"Video: {video_name}\n"
-        )
-
-        file.write(
-            "Algorithm: SHA-256\n"
-        )
-
-        file.write(
-            "=" * 60 + "\n"
-        )
-
-        for record in records:
-
-            file.write(
-                f"{record['frame_number']} | "
-                f"{record['fingerprint']} | "
-                f"{record['timestamp']}\n"
-            )
-
+    output_file = DATABASE_DIR / f"{Path(video_name).stem}_fingerprints.txt"
+    save_fingerprint_txt(output_file, records)
+    save_fingerprint_txt(LOCAL_FINGERPRINT_FILE, records)
     return output_file
+
+
+def flush_transmission_queue(limit=200, known_frame_cache=None):
+    """Retry queued records safely; server-side frame identity is checked first."""
+    if supabase is None:
+        return 0
+    sent = 0
+    known_frame_cache = known_frame_cache if known_frame_cache is not None else {}
+    while True:
+        batch = pending_records(LOCAL_QUEUE_DB, limit)
+        if not batch:
+            break
+        keys = {(r["driver_id"], r["video_name"]) for r in batch}
+        for driver, video in keys:
+            try:
+                identity = (driver, video)
+                if identity not in known_frame_cache:
+                    known_frame_cache[identity] = {
+                        int(r["frame_number"]) for r in get_cloud_records(driver, video)
+                    }
+            except Exception:
+                # A transient query failure leaves this batch queued for retry.
+                return sent
+        missing = [r for r in batch if int(r["frame_number"]) not in known_frame_cache[(r["driver_id"], r["video_name"])]]
+        try:
+            if missing:
+                supabase.table("fingerprints").insert(missing).execute()
+            for row in batch:
+                known_frame_cache[(row["driver_id"], row["video_name"])].add(int(row["frame_number"]))
+            mark_sent(LOCAL_QUEUE_DB, batch)
+            sent += len(missing)
+        except Exception as exc:
+            record_failure(LOCAL_QUEUE_DB, batch, str(exc))
+            break
+    return sent
 
 
 def process_video(
@@ -992,12 +1019,6 @@ def process_video(
     progress_bar,
     status_box,
 ):
-
-    if supabase is None:
-
-        raise RuntimeError(
-            "Supabase is not connected."
-        )
 
     video_path = Path(video_path)
 
@@ -1011,15 +1032,16 @@ def process_video(
     # Existing cloud evidence
     # --------------------------------------------------------
 
-    existing_records = get_cloud_records(
-        driver_id,
-        video_name,
-    )
+    try:
+        existing_records = get_cloud_records(driver_id, video_name)
+    except Exception:
+        existing_records = []
 
     existing_frames = {
         record["frame_number"]
         for record in existing_records
     }
+    known_frame_cache = {(driver_id, video_name): set(existing_frames)}
 
     # --------------------------------------------------------
     # Open video
@@ -1049,6 +1071,8 @@ def process_video(
         fps = 20.0
 
     new_records = []
+    all_video_records = []
+    uploaded = 0
 
     frame_number = 0
 
@@ -1098,12 +1122,17 @@ def process_video(
             "status":
                 "sent",
         }
+        all_video_records.append(record)
 
         if frame_number not in existing_frames:
-
             new_records.append(
                 record
             )
+
+        if len(new_records) >= 100:
+            enqueue_records(LOCAL_QUEUE_DB, new_records)
+            uploaded += flush_transmission_queue(known_frame_cache=known_frame_cache)
+            new_records = []
 
         progress = (
             frame_number /
@@ -1127,42 +1156,17 @@ def process_video(
     # Upload in batches
     # --------------------------------------------------------
 
-    uploaded = 0
-
-    batch_size = 500
-
-    for start in range(
-        0,
-        len(new_records),
-        batch_size,
-    ):
-
-        batch = new_records[
-            start:
-            start + batch_size
-        ]
-
-        response = (
-            supabase
-            .table("fingerprints")
-            .insert(batch)
-            .execute()
-        )
-
-        if response.data:
-
-            uploaded += len(
-                response.data
-            )
+    if new_records:
+        enqueue_records(LOCAL_QUEUE_DB, new_records)
+        uploaded += flush_transmission_queue(known_frame_cache=known_frame_cache)
 
     # --------------------------------------------------------
     # Combine local evidence
     # --------------------------------------------------------
 
-    combined_records = (
-        existing_records +
-        new_records
-    )
+    combined_by_frame = {int(row["frame_number"]): row for row in existing_records}
+    combined_by_frame.update({int(row["frame_number"]): row for row in all_video_records})
+    combined_records = list(combined_by_frame.values())
 
     combined_records.sort(
         key=lambda x:
@@ -1189,6 +1193,7 @@ def process_video(
 
         "local_file":
             str(local_file),
+        "pending": queue_size(LOCAL_QUEUE_DB),
     }
 
 
@@ -1254,6 +1259,13 @@ page = st.sidebar.radio(
         "Administration",
     ],
 )
+
+# Retry queued records on subsequent Streamlit reruns as well as by explicit user action.
+if supabase is not None and queue_size(LOCAL_QUEUE_DB):
+    try:
+        flush_transmission_queue()
+    except Exception:
+        pass  # Keep queued records for a later rerun/manual retry.
 
 st.sidebar.divider()
 
@@ -1921,10 +1933,10 @@ elif page == "Evidence Capture":
                         result["total_cloud_records"]
                     )
 
-                st.success(
-                    "☁️ Fingerprints successfully "
-                    "stored in Supabase."
-                )
+                if result["pending"]:
+                    st.warning(f"Evidence saved locally; {result['pending']} fingerprints await retry.")
+                else:
+                    st.success("☁️ Fingerprints transmitted to Supabase.")
 
                 st.info(
                     f"Local evidence file: "
@@ -1943,6 +1955,13 @@ elif page == "Evidence Capture":
             "Upload a video or record one from the "
             "camera before fingerprinting."
         )
+
+    queued_count = queue_size(LOCAL_QUEUE_DB)
+    if queued_count:
+        st.warning(f"{queued_count} fingerprint(s) are safely queued in the local SQLite retry store.")
+        if st.button("Retry pending Supabase uploads", key="retry_pending_uploads"):
+            sent_now = flush_transmission_queue()
+            st.success(f"Transmitted {sent_now} queued record(s); {queue_size(LOCAL_QUEUE_DB)} remain queued.")
 
 
 # ============================================================
@@ -2051,7 +2070,35 @@ elif page == "Insurance Verification":
 
         cloud_records = []
 
-    if not cloud_records:
+    local_files = sorted(DATABASE_DIR.glob("*_fingerprints.txt"))
+    if LOCAL_FINGERPRINT_FILE.exists() and LOCAL_FINGERPRINT_FILE not in local_files:
+        local_files.insert(0, LOCAL_FINGERPRINT_FILE)
+    verification_source = st.radio(
+        "Evidence source",
+        ["Supabase", "Local TXT"],
+        horizontal=True,
+        help="Choose cloud-certified records or a local one-hash-per-line fingerprint file.",
+        key="verification_evidence_source",
+    )
+    selected_local_file = None
+    local_hashes = []
+    if verification_source == "Local TXT":
+        if local_files:
+            selected_local_file = st.selectbox(
+                "Local fingerprint file", local_files,
+                format_func=lambda p: p.name,
+                key="verification_local_fingerprint_file",
+            )
+            try:
+                local_hashes = load_fingerprint_txt(selected_local_file)
+            except OSError as exc:
+                st.error(f"Could not read local fingerprint file: {exc}")
+        if local_hashes:
+            st.success(f"Using {len(local_hashes)} SHA-256 fingerprints from {selected_local_file.name}.")
+        else:
+            st.warning("No valid SHA-256 fingerprints were found in the selected local TXT file.")
+
+    if verification_source == "Supabase" and not cloud_records:
 
         st.warning(
             "⚠️ No certified cloud fingerprints "
@@ -2063,7 +2110,7 @@ elif page == "Insurance Verification":
             "'Fingerprint & Certify Evidence'."
         )
 
-    else:
+    elif verification_source == "Supabase":
 
         st.success(
             f"☁️ {len(cloud_records)} certified "
@@ -2082,7 +2129,7 @@ elif page == "Insurance Verification":
 
     if verify_button:
 
-        if not cloud_records:
+        if verification_source == "Supabase" and not cloud_records:
 
             st.error(
                 "Cannot verify because certified "
@@ -2091,11 +2138,17 @@ elif page == "Insurance Verification":
 
             st.stop()
 
-        cloud_fingerprints = {
+        cloud_fingerprints = ({
             record["frame_number"]:
                 record["fingerprint"]
             for record in cloud_records
-        }
+        } if verification_source == "Supabase" else {
+            frame_number: fingerprint
+            for frame_number, fingerprint in enumerate(local_hashes, start=1)
+        })
+        if not cloud_fingerprints:
+            st.error("No fingerprints are available from the selected source.")
+            st.stop()
 
         cap = cv2.VideoCapture(
             str(video_path)
@@ -2123,6 +2176,7 @@ elif page == "Insurance Verification":
         verified = 0
         corrupted = 0
         missing = 0
+        observed_hashes = []
 
         while True:
 
@@ -2136,6 +2190,7 @@ elif page == "Insurance Verification":
             current_hash = hash_frame(
                 frame
             )
+            observed_hashes.append(current_hash)
 
             certified_hash = (
                 cloud_fingerprints.get(
@@ -2168,6 +2223,15 @@ elif page == "Insurance Verification":
 
         cap.release()
 
+        exact_result = verify_hash_sequence(
+            {int(frame): str(digest) for frame, digest in cloud_fingerprints.items()},
+            observed_hashes,
+        )
+        checked = exact_result["checked"]
+        verified = exact_result["verified"]
+        corrupted = exact_result["modified_or_corrupt"] + exact_result["reordered_or_shifted"]
+        missing = exact_result["missing_reference_frames"] + exact_result["missing_candidate_fingerprints"]
+
         integrity = (
             (
                 verified /
@@ -2177,12 +2241,7 @@ elif page == "Insurance Verification":
             else 0
         )
 
-        if (
-            checked > 0 and
-            corrupted == 0 and
-            missing == 0 and
-            verified == checked
-        ):
+        if exact_result["status"] == "VERIFIED":
 
             status = "VERIFIED"
 
@@ -2197,6 +2256,11 @@ elif page == "Insurance Verification":
             "missing": missing,
             "integrity": integrity,
             "status": status,
+            "evidence_source": verification_source,
+            "duplicates": exact_result["duplicates"],
+            "leading_trim_frames": exact_result["leading_trim_frames"],
+            "trailing_trim_frames": exact_result["trailing_trim_frames"],
+            "anomalies": exact_result["anomalies"],
         }
 
         st.session_state.verification_report = (
@@ -2209,6 +2273,8 @@ elif page == "Insurance Verification":
                 missing,
                 integrity,
                 status,
+                verification_source,
+                f"modified={exact_result['modified_or_corrupt']}, reordered={exact_result['reordered_or_shifted']}, duplicates={exact_result['duplicates']}, missing={missing}",
             )
         )
 
@@ -2227,6 +2293,7 @@ elif page == "Insurance Verification":
         st.subheader(
             "📊 Verification Results"
         )
+        st.caption(f"Reference source: {result.get('evidence_source', 'Supabase')} · Exact SHA-256 matching is required for VERIFIED status.")
 
         r1, r2, r3, r4 = st.columns(4)
 
@@ -2257,6 +2324,14 @@ elif page == "Insurance Verification":
                 "Missing Frames",
                 result["missing"]
             )
+
+        st.write(
+            f"Repeated frames: **{result.get('duplicates', 0)}** · "
+            f"Estimated beginning trim: **{result.get('leading_trim_frames', 0)} frames** · "
+            f"Estimated ending trim: **{result.get('trailing_trim_frames', 0)} frames**"
+        )
+        if result.get("anomalies"):
+            st.dataframe(pd.DataFrame(result["anomalies"][:200]), use_container_width=True, hide_index=True)
 
         st.divider()
 
@@ -2380,6 +2455,37 @@ elif page == "Evaluation Lab":
         "Evaluate captured or uploaded evidence using "
         "multiple perceptual fingerprinting methods."
     )
+
+    benchmark_col, benchmark_note_col = st.columns([1, 2])
+    with benchmark_col:
+        run_benchmark = st.button("Run generated dataset benchmark", key="run_dataset_benchmark")
+    with benchmark_note_col:
+        st.caption("Measures real scenario scores, threshold curves and confusion metrics; it does not use preset results.")
+    if run_benchmark:
+        try:
+            from evaluation.run_evaluation import run as run_dataset_evaluation
+            with st.spinner("Evaluating the generated videos. This may take several minutes…"):
+                benchmark_summary = run_dataset_evaluation()
+            st.session_state.dataset_benchmark_summary = benchmark_summary
+            st.success(f"Benchmark wrote {benchmark_summary['scenario_count']} scenario results ({benchmark_summary['passed']} passed expected detection; {benchmark_summary['failed']} did not).")
+        except Exception as exc:
+            st.error(f"Dataset benchmark could not complete: {exc}")
+
+    benchmark_results = BASE_DIR / "evaluation" / "results"
+    threshold_csv = benchmark_results / "threshold_results.csv"
+    if threshold_csv.exists():
+        try:
+            threshold_table = pd.read_csv(threshold_csv)
+            recommended_rows = threshold_table[threshold_table["recommended"].astype(str).str.lower() == "true"]
+            if not recommended_rows.empty:
+                st.markdown("#### Measured recommended thresholds")
+                st.dataframe(recommended_rows[["metric", "sample_count", "threshold", "TP", "TN", "FP", "FN", "accuracy", "precision", "recall", "F1", "false_positive_rate", "false_negative_rate"]], use_container_width=True, hide_index=True)
+            scenario_csv = benchmark_results / "scenario_results.csv"
+            if scenario_csv.exists():
+                st.download_button("Download scenario results CSV", scenario_csv.read_bytes(), "scenario_results.csv", "text/csv")
+            st.download_button("Download threshold results CSV", threshold_csv.read_bytes(), "threshold_results.csv", "text/csv")
+        except (OSError, ValueError, KeyError) as exc:
+            st.warning(f"Could not display saved benchmark results: {exc}")
 
     st.divider()
 
@@ -2660,6 +2766,7 @@ elif page == "Evaluation Lab":
                     for method_name, method_function in hash_methods.items():
 
                         method_start_time = time.perf_counter()
+                        method_threshold, threshold_source = recommended_threshold(method_function)
 
                         if matching_mode == "Same Frame Position":
 
@@ -2668,6 +2775,7 @@ elif page == "Evaluation Lab":
                                 str(test_path),
                                 hash_method=method_function,
                                 sample_interval=int(sample_interval),
+                                match_threshold=method_threshold,
                             )
 
                             similarity = result["average_similarity"]
@@ -2684,6 +2792,7 @@ elif page == "Evaluation Lab":
                                 hash_method=method_function,
                                 sample_interval=int(sample_interval),
                                 max_shift=int(max_shift),
+                                match_threshold=method_threshold,
                             )
 
                             similarity = result["best_similarity"]
@@ -2700,8 +2809,10 @@ elif page == "Evaluation Lab":
                         )
 
                         result["classification"] = (
-                            classify_similarity(similarity)
+                            classify_similarity(similarity, method_threshold)
                         )
+                        result["match_threshold"] = method_threshold
+                        result["threshold_source"] = threshold_source
 
                         all_results[method_name] = result
 
@@ -2763,6 +2874,8 @@ elif page == "Evaluation Lab":
                     "Unknown"
                 ),
                 "Temporal Shift": shift,
+                "Shift (seconds)": result.get("shift_seconds"),
+                "Threshold (%)": result.get("match_threshold"),
                 "Processing Time (s)": round(
                     float(
                         result.get(
@@ -2813,7 +2926,8 @@ elif page == "Evaluation Lab":
                     with c1:
                         st.metric(
                             "Best Shift",
-                            f"{result.get('best_shift', 0)} frames"
+                            f"{result.get('best_shift', 0)} frames",
+                            f"{result.get('shift_seconds') or 0:.2f} seconds",
                         )
 
                     with c2:
@@ -2877,6 +2991,11 @@ elif page == "Evaluation Lab":
                 st.write(
                     f"**Classification:** "
                     f"{result.get('classification', 'Unknown')}"
+                )
+                st.caption(
+                    f"Threshold: {result.get('match_threshold', 70):.1f}% ({result.get('threshold_source', 'provisional')}) · "
+                    f"Matched test interval: {result.get('matched_start_frame')}–{result.get('matched_end_frame')} frames · "
+                    f"Matched: {result.get('matched_frames', 0)} / {result.get('frames_compared', 0)} sampled frames"
                 )
 
     else:

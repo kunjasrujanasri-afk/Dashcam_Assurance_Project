@@ -187,6 +187,38 @@ def similarity_score(hash1, hash2):
 
     return (1.0 - normalized_distance) * 100.0
 
+
+def vector_distances(vector_a, vector_b):
+    """Return L2, L1 and cosine metrics for numeric frame descriptors."""
+    a = np.asarray(vector_a, dtype=np.float64).ravel()
+    b = np.asarray(vector_b, dtype=np.float64).ravel()
+    if a.shape != b.shape:
+        raise ValueError("Feature vectors must have the same shape.")
+    delta = a - b
+    denominator = float(np.linalg.norm(a) * np.linalg.norm(b))
+    cosine = float(np.dot(a, b) / denominator) if denominator else (1.0 if not np.any(a) and not np.any(b) else 0.0)
+    return {"euclidean_l2": float(np.linalg.norm(delta)),
+            "manhattan_l1": float(np.abs(delta).sum()),
+            "cosine_similarity": cosine,
+            "cosine_distance": 1.0 - cosine}
+
+
+def optional_fuzzy_metrics(data_a: bytes, data_b: bytes) -> dict:
+    """Report ssdeep/TLSH comparisons only when their optional Windows wheels exist."""
+    metrics = {}
+    try:
+        import ssdeep
+        metrics["ssdeep"] = {"available": True, "similarity": ssdeep.compare(ssdeep.hash(data_a), ssdeep.hash(data_b))}
+    except Exception as exc:
+        metrics["ssdeep"] = {"available": False, "reason": str(exc)}
+    try:
+        import tlsh
+        hash_a, hash_b = tlsh.hash(data_a), tlsh.hash(data_b)
+        metrics["tlsh"] = {"available": bool(hash_a and hash_b), "distance": tlsh.diff(hash_a, hash_b) if hash_a and hash_b else None}
+    except Exception as exc:
+        metrics["tlsh"] = {"available": False, "reason": str(exc)}
+    return metrics
+
 # ============================================================
 # FRAME INFORMATION
 # ============================================================
@@ -457,7 +489,8 @@ def find_best_temporal_match(
     hash_method="phash",
     sample_interval=5,
     search_step=5,
-    match_threshold=70.0
+    match_threshold=70.0,
+    max_shift=None
 ):
     """
     Find the best temporal alignment between two videos.
@@ -518,6 +551,8 @@ def find_best_temporal_match(
     test_total = int(
         test_cap.get(cv2.CAP_PROP_FRAME_COUNT)
     )
+    ref_fps = ref_cap.get(cv2.CAP_PROP_FPS)
+    test_fps = test_cap.get(cv2.CAP_PROP_FPS)
 
     # --------------------------------------------------------
     # Read reference video sequentially
@@ -582,7 +617,10 @@ def find_best_temporal_match(
     max_possible_shift = max(
         reference_total,
         test_total
-    )
+    ) if max_shift is None else min(int(max_shift), max(reference_total, test_total))
+    if max_possible_shift < 0:
+        raise ValueError("max_shift must be >= 0.")
+
 
     best_shift = 0
     best_similarity = -1.0
@@ -649,7 +687,7 @@ def find_best_temporal_match(
 
         shift_results.append(result)
 
-        if average_similarity > best_similarity:
+        if (average_similarity, len(similarities)) > (best_similarity, best_comparisons):
 
             best_similarity = average_similarity
             best_shift = shift
@@ -665,9 +703,23 @@ def find_best_temporal_match(
     else:
         best_matched_percentage = 0.0
 
+    matched_test_positions = [
+        test_index for test_index in test_hashes
+        if test_index + best_shift in reference_hashes
+    ]
+    start_position = min(matched_test_positions) if matched_test_positions else None
+    end_position = max(matched_test_positions) if matched_test_positions else None
+    fps = test_fps or ref_fps or 0
+
     return {
         "best_shift": best_shift,
         "best_temporal_offset": best_shift,
+        "shift_frames": best_shift,
+        "shift_seconds": best_shift / fps if fps > 0 else None,
+        "matched_start_frame": start_position,
+        "matched_end_frame": end_position,
+        "matched_start_seconds": start_position / fps if start_position is not None and fps > 0 else None,
+        "matched_end_seconds": end_position / fps if end_position is not None and fps > 0 else None,
         "best_similarity": best_similarity,
         "average_similarity": best_similarity,
         "reference_frames": reference_total,
@@ -679,6 +731,7 @@ def find_best_temporal_match(
         "sample_interval": sample_interval,
         "search_step": search_step,
         "hash_method": hash_method,
+        "max_shift": max_possible_shift,
         "shift_results": shift_results,
     }
 
@@ -688,18 +741,11 @@ def find_best_temporal_match(
 # CLASSIFICATION
 # ============================================================
 
-def classify_similarity(similarity):
-    """
-    Initial experimental classification.
-    Thresholds should later be calibrated using the dataset.
-    """
-
-    if similarity >= 90:
-        return "Strong Match"
-    elif similarity >= 70:
-        return "Possible Match"
-    else:
-        return "Weak Match"
+def classify_similarity(similarity, threshold=70.0):
+    """Classify using the selected/evaluated threshold, not hard-coded bands."""
+    if not 0 <= float(threshold) <= 100:
+        raise ValueError("threshold must be between 0 and 100.")
+    return "MATCH" if float(similarity) >= float(threshold) else "NO MATCH"
 
 
 # ============================================================

@@ -6,6 +6,71 @@ type RecordRow = { id: number; driver_id: string; frame_number: number; fingerpr
 type Fingerprint = Omit<RecordRow, "id" | "created_at">;
 const nav = ["Overview", "Capture evidence", "Verify a video", "Evaluation lab", "Records"] as const;
 type Section = (typeof nav)[number];
+const OUTBOX_DB = "driveproof-fingerprint-outbox";
+const OUTBOX_STORE = "pending";
+
+function openOutbox(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(OUTBOX_DB, 1);
+    request.onupgradeneeded = () => request.result.createObjectStore(OUTBOX_STORE, { keyPath: "queueId" });
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error ?? new Error("Could not open local fingerprint queue."));
+  });
+}
+
+async function enqueueFingerprints(records: Fingerprint[]) {
+  const db = await openOutbox();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(OUTBOX_STORE, "readwrite");
+    const store = tx.objectStore(OUTBOX_STORE);
+    for (const record of records) {
+      const queueId = `${record.driver_id}\u0000${record.video_name}\u0000${record.frame_number}`;
+      store.put({ queueId, record });
+    }
+    tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error); tx.onabort = () => reject(tx.error);
+  });
+  db.close();
+}
+
+async function readOutbox(limit = 200): Promise<Array<{ queueId: string; record: Fingerprint }>> {
+  const db = await openOutbox();
+  const rows = await new Promise<Array<{ queueId: string; record: Fingerprint }>>((resolve, reject) => {
+    const request = db.transaction(OUTBOX_STORE, "readonly").objectStore(OUTBOX_STORE).getAll();
+    request.onsuccess = () => resolve((request.result as Array<{ queueId: string; record: Fingerprint }>).slice(0, limit));
+    request.onerror = () => reject(request.error);
+  });
+  db.close();
+  return rows;
+}
+
+async function removeOutbox(queueIds: string[]) {
+  const db = await openOutbox();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(OUTBOX_STORE, "readwrite");
+    const store = tx.objectStore(OUTBOX_STORE); queueIds.forEach(id => store.delete(id));
+    tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error); tx.onabort = () => reject(tx.error);
+  });
+  db.close();
+}
+
+async function outboxCount() {
+  const db = await openOutbox();
+  const count = await new Promise<number>((resolve, reject) => {
+    const request = db.transaction(OUTBOX_STORE, "readonly").objectStore(OUTBOX_STORE).count();
+    request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
+  });
+  db.close(); return count;
+}
+
+function parseLocalFingerprints(text: string): Set<string> {
+  const hashes = new Set<string>();
+  for (const line of text.split(/\r?\n/)) {
+    const fields = line.trim().split("|");
+    const candidate = (fields.length > 1 ? fields[1] : fields[0]).trim().toLowerCase();
+    if (/^[a-f0-9]{64}$/.test(candidate)) hashes.add(candidate);
+  }
+  return hashes;
+}
 
 function readableBytes(bytes: number) {
   return bytes > 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${(bytes / 1024).toFixed(0)} KB`;
@@ -15,6 +80,7 @@ export default function Home() {
   const [section, setSection] = useState<Section>("Overview");
   const [driverId, setDriverId] = useState("");
   const [file, setFile] = useState<File | null>(null);
+  const [localEvidenceFile, setLocalEvidenceFile] = useState<File | null>(null);
   const [records, setRecords] = useState<RecordRow[]>([]);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -24,6 +90,7 @@ export default function Home() {
   const [cameraActive, setCameraActive] = useState(false);
   const [recording, setRecording] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const [pendingFingerprints, setPendingFingerprints] = useState(0);
   const videoRef = useRef<HTMLVideoElement>(null);
   const cameraPreviewRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -32,8 +99,43 @@ export default function Home() {
   const recordingChunksRef = useRef<Blob[]>([]);
   const fileUrl = useMemo(() => file ? URL.createObjectURL(file) : "", [file]);
 
+  const refreshOutboxCount = useCallback(async () => {
+    try { setPendingFingerprints(await outboxCount()); } catch { setPendingFingerprints(0); }
+  }, []);
+
+  const flushOutbox = useCallback(async () => {
+    if (!navigator.onLine) { await refreshOutboxCount(); return 0; }
+    let sent = 0;
+    try {
+      while (true) {
+        const batch = await readOutbox(200);
+        if (!batch.length) break;
+        const response = await fetch("/api/fingerprints", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ records: batch.map(item => item.record) }) });
+        if (!response.ok) break;
+        await removeOutbox(batch.map(item => item.queueId));
+        sent += batch.length;
+      }
+    } catch {
+      // Keep all unacknowledged records in IndexedDB for the next retry.
+    }
+    await refreshOutboxCount();
+    return sent;
+  }, [refreshOutboxCount]);
+
+  const queueAndTransmit = useCallback(async (batch: Fingerprint[]) => {
+    await enqueueFingerprints(batch);
+    await refreshOutboxCount();
+    await flushOutbox();
+  }, [flushOutbox, refreshOutboxCount]);
+
   useEffect(() => () => { if (fileUrl) URL.revokeObjectURL(fileUrl); }, [fileUrl]);
   useEffect(() => { fetch("/api/health").then(r => r.ok ? setHealth("online") : setHealth("offline")).catch(() => setHealth("offline")); }, []);
+  useEffect(() => {
+    const initialRead = window.setTimeout(() => { void refreshOutboxCount(); }, 0);
+    const retry = () => { void flushOutbox(); };
+    window.addEventListener("online", retry);
+    return () => { window.clearTimeout(initialRead); window.removeEventListener("online", retry); };
+  }, [flushOutbox, refreshOutboxCount]);
   useEffect(() => {
     if (!recording) return;
     const timer = window.setInterval(() => setRecordingSeconds(seconds => seconds + 1), 1000);
@@ -114,7 +216,7 @@ export default function Home() {
     return payload.records as RecordRow[];
   }, [driverId]);
 
-  const hashVideo = async (source: File) => {
+  const hashVideo = async (source: File, onBatch?: (batch: Fingerprint[]) => Promise<void>) => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
     if (!video || !canvas) throw new Error("Video processor is not ready.");
@@ -134,6 +236,7 @@ export default function Home() {
     canvas.width = width; canvas.height = height;
     const count = Math.min(6000, Math.ceil(duration * sampleRate));
     const rows: Fingerprint[] = [];
+    let transmitBatch: Fingerprint[] = [];
     for (let i = 0; i < count; i++) {
       const time = Math.min(i / sampleRate, Math.max(0, duration - 0.025));
       await new Promise<void>((resolve, reject) => {
@@ -148,24 +251,24 @@ export default function Home() {
       const digest = await crypto.subtle.digest("SHA-256", rgb);
       const fingerprint = Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, "0")).join("");
       rows.push({ driver_id: driverId.trim(), frame_number: i, fingerprint, timestamp: new Date(Date.now() + time * 1000).toISOString(), video_name: source.name.slice(0, 200), status: "sent" });
+      if (onBatch) {
+        transmitBatch.push(rows[rows.length - 1]);
+        if (transmitBatch.length >= 100) {
+          await onBatch(transmitBatch);
+          transmitBatch = [];
+        }
+      }
       setProgress(Math.round((i + 1) / count * 100));
     }
+    if (onBatch && transmitBatch.length) await onBatch(transmitBatch);
     video.removeAttribute("src"); video.load(); URL.revokeObjectURL(sourceUrl);
     return rows;
-  };
-
-  const submitHashes = async (rows: Fingerprint[]) => {
-    for (let start = 0; start < rows.length; start += 200) {
-      const response = await fetch("/api/fingerprints", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ records: rows.slice(start, start + 200) }) });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error ?? "Could not save fingerprints.");
-    }
   };
 
   const runCapture = async () => {
     if (!file) { setMessage("Choose a video file to capture."); return; }
     setBusy(true); setMessage("Processing video locally in your browser…"); setProgress(0);
-    try { const hashes = await hashVideo(file); await submitHashes(hashes); setMessage(`Saved ${hashes.length.toLocaleString()} sampled fingerprints. The video stayed on this device.`); }
+    try { const hashes = await hashVideo(file, queueAndTransmit); const remaining = await outboxCount(); setPendingFingerprints(remaining); setMessage(`Processed ${hashes.length.toLocaleString()} fingerprints. ${remaining} remain queued on this device. The video stayed on this device.`); }
     catch (error) { setMessage(error instanceof Error ? error.message : "Capture failed."); }
     finally { setBusy(false); }
   };
@@ -174,11 +277,12 @@ export default function Home() {
     if (!file) { setMessage("Choose the video you want to verify."); return; }
     setBusy(true); setMessage("Checking stored evidence…"); setProgress(0);
     try {
-      const [incoming, existing] = await Promise.all([hashVideo(file), loadRecords(file.name)]);
-      const known = new Set(existing.map(row => row.fingerprint));
+      const incoming = await hashVideo(file);
+      const existing = localEvidenceFile ? [] : await loadRecords(file.name);
+      const known = localEvidenceFile ? parseLocalFingerprints(await localEvidenceFile.text()) : new Set(existing.map(row => row.fingerprint));
       const matches = incoming.filter(row => known.has(row.fingerprint)).length;
       setRecords(existing);
-      setMessage(`${matches} of ${incoming.length} sampled fingerprints match stored records (${existing.length} records found for this driver and video).`);
+      setMessage(`${matches} of ${incoming.length} sampled fingerprints match ${localEvidenceFile ? `local TXT evidence (${known.size} hashes)` : `Supabase records (${existing.length} records)`}.`);
     } catch (error) { setMessage(error instanceof Error ? error.message : "Verification failed."); }
     finally { setBusy(false); }
   };
@@ -216,10 +320,12 @@ export default function Home() {
               {cameraActive && <video ref={cameraPreviewRef} className="camera-video" autoPlay muted playsInline />}
             </div>}
             <label className="upload-box"><input type="file" accept="video/*" onChange={chooseFile} /><span className="upload-symbol">↑</span><strong>{file ? file.name : "Choose a dashcam video"}</strong><span>{file ? readableBytes(file.size) : "MP4, MOV, WebM and other browser-supported video formats"}</span></label>
+            {section === "Verify a video" && <label className="local-evidence"><span>Optional local fingerprint evidence (.txt)</span><input type="file" accept=".txt,text/plain" onChange={e => { setLocalEvidenceFile(e.target.files?.[0] ?? null); setMessage(""); }} /><small>{localEvidenceFile ? `Using ${localEvidenceFile.name}; verification stays local.` : "Choose a one-hash-per-line SHA-256 file to verify offline. Leave empty to query Supabase."}</small></label>}
             {file && <video className="selected-preview" src={fileUrl} controls playsInline preload="metadata" aria-label="Selected video preview" />}
             <div className="settings-row"><label htmlFor="sample-rate">Sampling rate</label><select id="sample-rate" value={sampleRate} onChange={e => setSampleRate(Number(e.target.value))}><option value={1}>1 frame per second</option><option value={2}>2 frames per second</option><option value={5}>5 frames per second</option></select><span className="settings-help">Downscaled to 640px before hashing</span></div>
             {busy && <div className="progress-wrap"><div><span>Processing locally</span><span>{progress}%</span></div><div className="progress-track"><i style={{ width: `${progress}%` }} /></div></div>}
-            <div className="tool-actions">{section === "Capture evidence" ? <button className="button button-dark" onClick={runCapture} disabled={busy || health !== "online"}>{busy ? "Working…" : "Create fingerprints"} <span>→</span></button> : <button className="button button-dark" onClick={runVerify} disabled={busy || health !== "online"}>{busy ? "Working…" : "Verify video"} <span>→</span></button>}<span className="local-note">⌑ &nbsp;Video remains on this device</span></div>
+            <div className="tool-actions">{section === "Capture evidence" ? <button className="button button-dark" onClick={runCapture} disabled={busy}>{busy ? "Working…" : "Create fingerprints"} <span>→</span></button> : <button className="button button-dark" onClick={runVerify} disabled={busy || (health !== "online" && !localEvidenceFile)}>{busy ? "Working…" : "Verify video"} <span>→</span></button>}<span className="local-note">⌑ &nbsp;Video remains on this device</span></div>
+            {section === "Capture evidence" && <div className="outbox-status"><span>{pendingFingerprints ? `${pendingFingerprints} fingerprint(s) safely queued in this browser` : "Browser retry queue is clear"}</span>{pendingFingerprints > 0 && <button className="text-button" onClick={async () => { const sent = await flushOutbox(); setMessage(`Retry sent ${sent} fingerprints; ${await outboxCount()} remain queued.`); }}>Retry queued hashes</button>}</div>}
             {message && <div className="result-message">{message}</div>}
           </div><video ref={videoRef} className="processor" playsInline /><canvas ref={canvasRef} className="processor" />
         </>}

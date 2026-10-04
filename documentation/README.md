@@ -1,565 +1,116 @@
-#### Dashcam Assurance
+# Dashcam Assurance
 
-Certified Digital Evidence Integrity Platform
+Dashcam Assurance is a coursework prototype with two interfaces:
 
-Dashcam Assurance is a Streamlit-based digital evidence platform for
-capturing dashcam footage, generating frame-level SHA-256 fingerprints,
-storing evidence fingerprints in Supabase, and verifying video integrity
-for insurance-related evidence workflows.
+- **Encoder and transmitter:** the Streamlit application (`app.py`) captures a video from upload or browser camera, creates a SHA-256 digest for each decoded frame, writes local TXT evidence, and progressively sends fingerprint batches to Supabase.
+- **Decoder and evaluation lab:** the same application verifies frame digests against cloud or local TXT evidence, reports exact mismatches and sequence anomalies, compares perceptual hashes for temporal alignment, and runs reproducible evaluation scenarios.
+- **Browser capture demo:** `web/` contains the Next.js camera capture and Supabase viewer deployed to Vercel. It is a separate demonstration UI and does not replace the Streamlit encoder/decoder.
 
-The project supports both uploaded dashcam footage and browser-based
-camera recording.
+## Architecture and integrity model
 
-#### 1. Project Overview
+OpenCV decodes video frames. `hashlib.sha256(frame.tobytes())` creates an exact byte-level digest of each decoded frame. Records carry the one-based frame number, timestamp, driver ID, video name, status, and digest. The Streamlit transmitter does not send the original video; it remains in the local `videos/` directory.
 
-The system is designed around four main stages:
+SHA-256 answers whether decoded frame bytes match a trusted record. It does not identify what visual edit occurred, and re-encoding generally changes frame bytes. The Evaluation Lab therefore uses separate aHash, dHash, pHash, and wHash algorithms with Hamming and normalized Hamming distances for visual similarity. Similarity is exploratory evidence; it never upgrades a failed SHA-256 check to `VERIFIED`.
 
-Capture --- upload an existing dashcam video or record evidence
-from a browser camera.
+`decoder/integrity.py` classifies exact matches, modified/corrupt frames, repeated digests, known digests found at a different reference position, absent reference positions, and leading/trailing trims. Perceptual temporal matching is available in the Evaluation Lab and reports frame offset, seconds, matched interval, and confidence.
 
-Fingerprint --- calculate a SHA-256 fingerprint for each video
-frame.
+## Encoder, transmission, and offline recovery
 
-Certify --- store frame fingerprints and evidence metadata in
-Supabase.
+The Streamlit encoder handles uploaded files and WebRTC camera recordings while the page is open. It samples decoded frames, saves one-hash-per-line TXT files (`database/fingerprints.txt` and a video-specific file), and writes accompanying frame metadata to JSON sidecars.
 
-Verify --- compare a selected video against its stored
-fingerprints and generate an integrity report.
-The application also includes an administration area for viewing cloud
-evidence statistics and handling retention-based deletion.
+New fingerprints enter `database/transmission_queue.sqlite3` in batches while frame processing continues. SQLite uses a unique driver/video/frame identity, so duplicate enqueues are ignored. Failed Supabase reads or writes leave records on disk. The Capture page reports queue size and offers retry. On retry, the app checks existing cloud frame numbers before inserting queued records. Delivery is at-least-once with cloud-read deduplication, not a server-attested exactly-once protocol.
 
-#### 2. Main Features
+The Streamlit queue is on the application host. The deployed browser capture page does not share this SQLite queue; browser users need a network connection when its fingerprint request is sent.
 
-Evidence Capture
+## Decoder and evidence sources
 
-Upload video files.
+Open **Insurance Verification**, choose **Supabase** or **Local TXT**, and select the evidence video. TXT files accept one 64-character SHA-256 digest per line and legacy `frame | hash | timestamp` records. Verification reports the selected source and can download a text report.
 
-Record video directly from a browser camera.
+Cloud records are queried by driver ID and video name. Public access and row-level policy settings depend on the linked Supabase project's configuration. Do not enter sensitive personal information as a driver ID.
 
-Automatically set newly uploaded or recorded footage as the active
-evidence.
+## Dataset and evaluation
 
-Display video information such as frame count, FPS, resolution, and
-duration.
+`evaluation/generate_test_dataset.py` deterministically creates authentic, temporal, transformed, and synthetic-other-trip cases. The generator includes beginning/end trims, extracted segments, shifts, changed playback speed/FPS, missing/duplicated/reordered frames, brightness/contrast, noise, crop, watermark, codec, bitrate, and resolution transformations when FFmpeg encoders are available. It creates an explicitly labeled synthetic other-trip clip when a second real source is not supplied, and a partially modified clip using that video.
 
-Support common video formats such as MP4, AVI, MOV, MKV, and WEBM
-where supported by the installed video codecs.
+Run the full sweep with:
 
-Cryptographic Fingerprinting
+```powershell
+.\venv\Scripts\python.exe evaluation\generate_test_dataset.py
+.\venv\Scripts\python.exe -m evaluation.run_evaluation
+```
 
-SHA-256 hashing is applied to each decoded video frame.
+The generator rewrites standard generated filenames. Keep a copy of any custom dataset before regenerating. The runner writes `scenario_results.csv`, `threshold_results.csv`, `summary.csv`, and `confusion_matrix.csv` under `evaluation/results/`. Threshold sweeps record TP, TN, FP, FN, accuracy, precision, recall, specificity, F1, balanced accuracy, false-positive rate, and false-negative rate for all four perceptual hashes. The runner deterministically balances positive and negative frame pairs, then recommends thresholds by balanced accuracy and F1. It does not recommend a threshold if the best balanced accuracy is at or below chance (50%); the UI labels its fallback as provisional. These are dataset measurements, not production guarantees; results depend on the labeled clips, codecs, and sampling settings.
 
-Each fingerprint is associated with:
+Optional fuzzy libraries such as ssdeep and TLSH are not required or currently used. L1, L2, cosine similarity, and cosine distance helpers are available for numeric frame descriptors; these do not replace cryptographic verification.
 
-Driver ID
+## Setup: Streamlit encoder and decoder
 
-Frame number
+Requirements: Python 3.10 or newer, Git, a webcam-capable HTTPS browser for camera recording, and FFmpeg with `libx264`/`libx265` encoders to produce every optional codec scenario.
 
-Timestamp
-
-Video name
-
-Fingerprint
-
-Evidence status
-
-Cloud Evidence Storage
-
-Supabase PostgreSQL is used for cloud storage.
-
-Fingerprints are stored in the public.fingerprints table.
-
-Uploads can be processed in batches.
-
-Existing records are checked to reduce duplicate fingerprint
-insertion.
-
-Insurance Verification
-
-The selected video is decoded frame-by-frame.
-
-Each calculated SHA-256 fingerprint is compared with the
-corresponding cloud fingerprint.
-
-The system reports:
-
-Frames checked
-
-Verified frames
-
-Corrupted frames
-
-Missing frames
-
-Integrity percentage
-
-Verification status
-
-A verification report can be downloaded.
-
-Administration
-
-View cloud evidence statistics.
-
-View recent evidence records.
-
-Check pending/duplicate information.
-
-Configure a retention period.
-
-Permanently delete expired cloud fingerprint records after
-confirmation.
-
-#### 3. Technology Stack
-
-Technology         Purpose
-
-Python             Application and processing logic
-Streamlit          Web interface
-OpenCV             Video decoding and frame processing
-hashlib            SHA-256 fingerprint generation
-Supabase           Cloud PostgreSQL database
-python-dotenv      Environment variable management
-streamlit-webrtc   Browser camera/WebRTC integration
-aiortc             WebRTC media handling and recording
-
-4. Project Structure
-
-Dashcam_Assurance_Project/
-│
-├── app.py
-├── .env
-├── requirements.txt
-│
-├── assets/
-│   
-│
-├── videos/
-│   ├── uploaded videos
-│   └── camera recordings
-│
-├── database/
-│   └── fingerprints.txt
-│
-├── encoder/
-│   └── encoder.py
-    |___store recorded videos
-│
-└── decoder/
-    ├── decoder.py
-    └── admin.py
-
-
-#### 5. Installation
-
-Requirements
-
-Recommended environment:
-
-Windows, macOS, or Linux
-
-Python 3.10+ recommended
-
-Internet connection for Supabase access
-
-A modern browser for camera recording
-
-Create a virtual environment
-
-Windows PowerShell:
-
-cd "C:\Users\sampa\OneDrive\Desktop\Dashcam_Assurance_Project"
-
+```powershell
+git clone https://github.com/kunjasrujanasri-afk/Dashcam_Assurance_Project.git
+cd Dashcam_Assurance_Project
 python -m venv venv
-
 .\venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+Copy-Item .env.example .env
+```
 
-If PowerShell blocks activation, run the project using the Python
-executable inside venv directly or adjust the local PowerShell
-execution policy according to your system's policy.
+Edit `.env` locally and set `SUPABASE_URL` and `SUPABASE_SECRET_KEY` using the current Supabase project credentials. The admin page also reads those variables. Never commit `.env`; `.env.example` contains placeholders only.
 
-Install dependencies
-
-pip install -r requirements.txt
-
-If requirements.txt does not yet exist:
-
-pip freeze > requirements.txt
-
-For browser camera recording, the project uses:
-
-streamlit-webrtc
-aiortc
-av
-
-#### 6. Environment Configuration
-
-Create a .env file in the project root.
-
-Example:
-
-SUPABASE_URL=your_supabase_project_url
-SUPABASE_SECRET_KEY=your_server_side_supabase_key
-
-
-A safer Git configuration should include:
-
-.env
-venv/
-
-inside .gitignore.
-
-#### 7. Supabase Database
-
-The application uses:
-
-public.fingerprints
-
-A representative table structure is:
-
-create table public.fingerprints (
-  id bigserial primary key,
-  driver_id text not null,
-  frame_number integer not null,
-  fingerprint text not null,
-  timestamp timestamp without time zone not null,
-  video_name text,
-  status text default 'pending',
-  created_at timestamp without time zone default now()
-);
-
-Row Level Security (RLS) should be configured according to the
-deployment/security model.
-
-For production use, database permissions should follow the principle of
-least privilege.
-
-8. Running the Application
-
-Start Streamlit:
-
-cd "C:\Users\sampa\OneDrive\Desktop\Dashcam_Assurance_Project"
-
-.\venv\Scripts\Activate.ps1
-
+```powershell
 streamlit run app.py
+```
 
-Open the local address displayed by Streamlit, normally:
+Open the URL printed by Streamlit, select a driver ID, upload or record evidence, and choose **Fingerprint & Certify Evidence**. Verification, evaluation, evidence records, and administration are available from the sidebar.
 
-http://localhost:8501
+If Supabase is offline or unconfigured, local fingerprinting and TXT export still work; transmissions remain queued and can be retried after recovery.
 
-9. Typical Workflow
+## Setup: Vercel browser app
 
-Step 1 --- Select Driver
+The Next.js source is under `web/` and deploys from that root. Install Node.js 20 or newer, then:
 
-Enter the Driver ID in the application.
+```powershell
+cd web
+npm ci
+npm run dev
+```
 
-Example:
+Configure `SUPABASE_URL` and a publishable/anon key in the local Next/Vercel environment. Never use a service-role or secret key in browser-visible variables. Pushes to `main` trigger Vercel deployments.
 
-driver-01
+The browser page requests camera/microphone access only after **Start camera** is chosen. It records a WebM file in the active page, then locally samples and hashes it. Background/locked-screen continuous dashcam recording is outside a browser page's reliable capabilities.
 
-Step 2 --- Capture Evidence
+## Supabase and retention
 
-Go to:
+The app expects a `public.fingerprints` table with `driver_id`, `frame_number`, `fingerprint`, `timestamp`, `video_name`, and `status` columns, plus an `id` and optionally `created_at`. The anon/publishable key must have the intended read/insert grants and RLS policies. Retention deletion targets only the selected expired record IDs in the Streamlit administration workflow.
 
-Evidence Capture
+Use a dedicated Supabase project for assessment. The deployed browser demo is public and its anonymous policies may allow visitors to submit or query data; do not use it for real insurance evidence or personal data.
 
-Choose either:
+## Validation
 
-Upload Video
+Run local tests (they do not contact Supabase):
 
-Record From Camera
+```powershell
+.\venv\Scripts\python.exe -m unittest discover -s tests -v
+```
 
-The newly selected video should become the active evidence.
+Tests cover SHA-256 behavior, perceptual hashes and distances, bounded temporal shifts, threshold metrics, TXT parsing, SQLite queue durability/dedup/retry, dataset generation, and CSV outputs.
 
-Step 3 --- Review Evidence
+Run the Next.js production build:
 
-Check:
+```powershell
+cd web
+npm run build
+```
 
-Video name
+`test_supabase.py` is a live integration script and may write a test row; run it only against an isolated test project.
 
-Number of frames
+## Reference-informed scope and remaining limits
 
-FPS
+The [CloudDash Integrity reference](https://github.com/asrieldev/clouddash-integrity) documents Supabase Auth and workspace roles, signed device metadata, chained capture sessions, IndexedDB persistence, private incident-video storage, and an authenticated insurer monitor. This repository has a Streamlit capture/decoder prototype, Supabase fingerprint storage, a local SQLite retry queue, a separate public Vercel camera demo, and reproducible local evaluation. It does **not** yet provide the reference's authentication/workspace model, device ECDSA signatures/hash chain, private incident-video locking/storage, realtime monitor, or server-attested audit history. Those features require schema, access-control, and device-key changes and are not represented as implemented.
 
-Resolution
+The Streamlit camera works while its page is open; it is not an always-on native dashcam app. A demonstration video still needs to be recorded from the running application. TXT and SQLite evidence files are local artifacts and must be backed up separately.
 
-Duration
+## Security note
 
-Step 4 --- Generate Fingerprints
-
-Click:
-
-Fingerprint & Certify Evidence
-
-The application calculates SHA-256 fingerprints for the video's frames
-and stores the certified fingerprints in Supabase.
-
-Step 5 --- Verify Integrity
-
-Go to:
-
-Insurance Verification
-
-Select the active evidence and run verification.
-
-A successful unchanged video should report matching frames and a
-corresponding integrity result.
-
-Step 6 --- Generate Report
-
-Download the generated verification report for documentation or
-demonstration purposes.
-
-Step 7 --- Administration
-
-Use:
-
-Administration
-
-to inspect cloud records, statistics, and retention/deletion controls.
-
-#### 10. Integrity Verification Concept
-
-For each frame:
-
-Video Frame
-     |
-     v
-OpenCV Decode
-     |
-     v
-SHA-256(frame bytes)
-     |
-     v
-Calculated Fingerprint
-     |
-     v
-Compare with Supabase fingerprint
-     |
-     +---- Match ------> Verified
-     |
-     +---- Different --> Corrupted
-     |
-     +---- Missing ----> Missing
-
-The core integrity principle is:
-
-Same frame content
-      ↓
-Same SHA-256 fingerprint
-
-If the frame content changes, its calculated fingerprint is expected to
-change.
-
-#### 11. Example Verification Report
-
-A successful verification report can contain:
-
-INSURANCE INTEGRITY VERIFICATION REPORT
-========================================
-Verification Time: YYYY-MM-DD HH:MM:SS
-Driver ID: driver-01
-Video Name: example.mp4
-Fingerprint Algorithm: SHA-256
-
-Frames Checked: N
-Verified Frames: N
-Corrupted Frames: 0
-Missing Frames: 0
-Integrity: 100.00%
-Status: VERIFIED
-
-Verification completed successfully.
-
-The exact frame count depends on the selected video.
-
-#### 12. Camera Recording
-
-The browser camera feature uses WebRTC.
-
-For local development:
-
-Open the application using localhost.
-
-Allow camera permission when the browser asks.
-
-Click START.
-
-Record the evidence.
-
-Click STOP.
-
-The application saves the recording under the project's videos
-directory.
-
-Camera access can be affected by browser permissions, operating-system
-camera permissions, and WebRTC configuration.
-
-#### 13. Important Data Reset Procedure
-
-If you intentionally want to start a completely new fingerprint dataset,
-clear the cloud fingerprint table:
-
-TRUNCATE TABLE public.fingerprints RESTART IDENTITY;
-
-Then verify:
-
-SELECT COUNT(*) FROM public.fingerprints;
-
-Expected result:
-
-0
-
-Also remove or replace old local fingerprint files if they are no longer
-required.
-
-Do not repeatedly certify the same video unless the application is
-intended to keep multiple evidence records for it.
-
-#### 14. Security Considerations
-
-Current security-related mechanisms include:
-
-SHA-256 frame fingerprints.
-
-Supabase cloud storage.
-
-Environment variables for configuration/secrets.
-
-RLS support on the fingerprint table.
-
-Retention-based cloud record deletion.
-
-Verification reports.
-
-Production recommendations
-
-For a production deployment, consider adding:
-
-User authentication.
-
-Role-based access control.
-
-Per-user/organization authorization.
-
-Stronger database policies.
-
-Audit logs.
-
-Encryption at rest and in transit.
-
-Signed evidence manifests.
-
-Immutable/WORM evidence storage.
-
-Secure key management.
-
-Server-side validation of uploaded files.
-
-Malware/content scanning for uploaded files.
-
-Explicit chain-of-custody records.
-
-#### 15. Current Limitations
-
-The system is primarily a project/prototype implementation rather
-than a complete production insurance platform.
-
-Browser camera behavior depends on WebRTC and browser permissions.
-
-Video decoding depends on available codecs.
-
-Local video files remain on the machine unless explicitly managed.
-
-Cloud fingerprint deletion does not automatically imply secure
-deletion of every local copy.
-
-Authentication and full role-based authorization require additional
-implementation.
-
-SHA-256 provides integrity checking but does not by itself prove who
-originally created a video.
-
-#### 16. Troubleshooting
-
-Supabase connection error
-
-Check:
-
-SUPABASE_URL
-SUPABASE_SECRET_KEY
-
-in .env.
-
-Restart Streamlit after changing .env.
-
-Camera does not start
-
-Check:
-
-Browser camera permission.
-
-Windows camera permission.
-
-Use localhost for local testing.
-
-Check that no other application is exclusively using the camera.
-
-Old evidence appears
-
-Make sure a new video is selected as active evidence and that the
-application is not automatically assigning an old default video.
-
-The current design should not automatically select dashcam_test.mp4.
-
-Fingerprint count is unexpectedly high
-
-Check the Supabase table:
-
-SELECT COUNT(*) FROM public.fingerprints;
-
-Repeated certification can create additional records depending on the
-current application logic and database constraints.
-
-
-#### 17. Suggested Demonstration Sequence
-
-For a project presentation:
-
-Dashboard
-   ↓
-Evidence Capture
-   ↓
-Upload or Record Video
-   ↓
-Review Video Metadata
-   ↓
-Generate Certified Fingerprints
-   ↓
-Show Supabase Records
-   ↓
-Insurance Verification
-   ↓
-Show Integrity Result
-   ↓
-Download Verification Report
-   ↓
-Administration
-
-#### 18. Project Goal
-
-The goal of Dashcam Assurance is to demonstrate how cryptographic frame
-fingerprinting can be used to detect changes to digital dashcam evidence
-and provide a structured verification workflow for insurance-oriented
-evidence handling.
-
-#### 19. Author / Academic Project
-
-Project: Dashcam Assurance
-Type: Digital Evidence Integrity Platform
-Frontend: Streamlit
-Database: Supabase PostgreSQL
-Integrity Algorithm: SHA-256
-Video Processing: OpenCV
-Camera/WebRTC: streamlit-webrtc + aiortc
+An earlier public Git commit included a `.env` file. It is ignored and not tracked in the current checkout, but removing it from the latest revision does not erase prior Git history. The repository owner must revoke/rotate any credential that appeared in that historic file and consider purging the exposed blob from Git history. This project is public-access coursework software; do not treat its public deployment as an authenticated evidence service.
