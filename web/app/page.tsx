@@ -21,16 +21,87 @@ export default function Home() {
   const [message, setMessage] = useState("");
   const [health, setHealth] = useState<"checking" | "online" | "offline">("checking");
   const [sampleRate, setSampleRate] = useState(2);
+  const [cameraActive, setCameraActive] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const cameraPreviewRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const cameraStreamRef = useRef<MediaStream | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const recordingChunksRef = useRef<Blob[]>([]);
   const fileUrl = useMemo(() => file ? URL.createObjectURL(file) : "", [file]);
 
   useEffect(() => () => { if (fileUrl) URL.revokeObjectURL(fileUrl); }, [fileUrl]);
   useEffect(() => { fetch("/api/health").then(r => r.ok ? setHealth("online") : setHealth("offline")).catch(() => setHealth("offline")); }, []);
+  useEffect(() => {
+    if (!recording) return;
+    const timer = window.setInterval(() => setRecordingSeconds(seconds => seconds + 1), 1000);
+    return () => window.clearInterval(timer);
+  }, [recording]);
+  useEffect(() => () => { cameraStreamRef.current?.getTracks().forEach(track => track.stop()); }, []);
+
+  const closeCamera = () => {
+    cameraStreamRef.current?.getTracks().forEach(track => track.stop());
+    cameraStreamRef.current = null;
+    if (cameraPreviewRef.current) cameraPreviewRef.current.srcObject = null;
+    setCameraActive(false);
+  };
 
   const chooseFile = (event: ChangeEvent<HTMLInputElement>) => {
     const picked = event.target.files?.[0] ?? null;
+    if (cameraStreamRef.current) closeCamera();
     setFile(picked); setMessage(""); setProgress(0); setRecords([]);
+  };
+
+  const openCamera = async () => {
+    setMessage("");
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      setMessage("Camera recording is not supported in this browser. Choose a video file instead.");
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: true });
+      cameraStreamRef.current = stream;
+      if (cameraPreviewRef.current) cameraPreviewRef.current.srcObject = stream;
+      setCameraActive(true);
+    } catch {
+      setMessage("Camera access was not granted. Allow camera and microphone access in your browser, or choose a video file.");
+    }
+  };
+
+  const startCameraRecording = () => {
+    const stream = cameraStreamRef.current;
+    if (!stream || typeof MediaRecorder === "undefined") return;
+    const mimeType = ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm"].find(type => MediaRecorder.isTypeSupported(type));
+    try {
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      recordingChunksRef.current = [];
+      recorder.ondataavailable = event => { if (event.data.size > 0) recordingChunksRef.current.push(event.data); };
+      recorder.onstop = () => {
+        const blob = new Blob(recordingChunksRef.current, { type: recorder.mimeType || "video/webm" });
+        if (blob.size > 0) {
+          const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+          const recordedFile = new File([blob], `dashcam-${stamp}.webm`, { type: blob.type });
+          setFile(recordedFile); setProgress(0); setMessage("Camera recording is ready. Create fingerprints to save its evidence trail.");
+        } else {
+          setMessage("The camera recording was empty. Try recording again.");
+        }
+        closeCamera();
+      };
+      recorder.onerror = () => setMessage("Camera recording stopped unexpectedly. Please try again.");
+      recorderRef.current = recorder;
+      recorder.start(1000);
+      setRecordingSeconds(0); setRecording(true); setMessage("");
+    } catch {
+      setMessage("Could not start camera recording. Try another browser or choose a video file.");
+    }
+  };
+
+  const stopCameraRecording = () => {
+    if (recorderRef.current?.state === "recording") recorderRef.current.stop();
+    recorderRef.current = null;
+    setRecording(false);
   };
 
   const loadRecords = useCallback(async (videoName?: string) => {
@@ -138,7 +209,14 @@ export default function Home() {
         </>}
         {(section === "Capture evidence" || section === "Verify a video" || section === "Evaluation lab") && <>
           <div className="tool-card"><div className="tool-intro"><div className="tool-icon">{section === "Capture evidence" ? "◉" : section === "Verify a video" ? "⌕" : "▥"}</div><div><h2>{section === "Capture evidence" ? "Create an evidence record" : section === "Verify a video" ? "Check video against records" : "Compare a video to evidence"}</h2><p>Frames are sampled and hashed on this device. The original video is never uploaded.</p></div></div>
+            {section === "Capture evidence" && <div className="camera-recorder">
+              <div className="camera-copy"><div><strong>Record with this device</strong><p>Use your camera to record a clip, then fingerprint it here. Video stays in your browser.</p></div>
+                {!cameraActive ? <button className="button button-outline" onClick={openCamera} disabled={busy}>Start camera</button> : <div className="camera-controls">{recording ? <><span className="rec-indicator"><i />REC {Math.floor(recordingSeconds / 60).toString().padStart(2, "0")}:{(recordingSeconds % 60).toString().padStart(2, "0")}</span><button className="button button-dark" onClick={stopCameraRecording}>Stop &amp; use recording</button></> : <><button className="button button-dark" onClick={startCameraRecording}>Start recording</button><button className="text-button" onClick={closeCamera}>Cancel</button></>}</div>}
+              </div>
+              {cameraActive && <video ref={cameraPreviewRef} className="camera-video" autoPlay muted playsInline />}
+            </div>}
             <label className="upload-box"><input type="file" accept="video/*" onChange={chooseFile} /><span className="upload-symbol">↑</span><strong>{file ? file.name : "Choose a dashcam video"}</strong><span>{file ? readableBytes(file.size) : "MP4, MOV, WebM and other browser-supported video formats"}</span></label>
+            {file && <video className="selected-preview" src={fileUrl} controls playsInline preload="metadata" aria-label="Selected video preview" />}
             <div className="settings-row"><label htmlFor="sample-rate">Sampling rate</label><select id="sample-rate" value={sampleRate} onChange={e => setSampleRate(Number(e.target.value))}><option value={1}>1 frame per second</option><option value={2}>2 frames per second</option><option value={5}>5 frames per second</option></select><span className="settings-help">Downscaled to 640px before hashing</span></div>
             {busy && <div className="progress-wrap"><div><span>Processing locally</span><span>{progress}%</span></div><div className="progress-track"><i style={{ width: `${progress}%` }} /></div></div>}
             <div className="tool-actions">{section === "Capture evidence" ? <button className="button button-dark" onClick={runCapture} disabled={busy || health !== "online"}>{busy ? "Working…" : "Create fingerprints"} <span>→</span></button> : <button className="button button-dark" onClick={runVerify} disabled={busy || health !== "online"}>{busy ? "Working…" : "Verify video"} <span>→</span></button>}<span className="local-note">⌑ &nbsp;Video remains on this device</span></div>
