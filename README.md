@@ -4,7 +4,9 @@ Dashcam Assurance is a browser application for recording journeys, anchoring sig
 
 [Live application](https://dashcamassuranceproject.vercel.app/) · [Web application guide](web/README.md) · [Setup](web/docs/SETUP.md)
 
-The deployed application lives in **`web/`**. Its interface uses a vertical navigation rail, frosted glass panels, and a responsive bento layout. The older Python prototype remains in the repository's root folders; Vercel builds the Next.js application in `web/`.
+The application lives in **`web/`**. Its interface uses a vertical navigation rail, frosted glass panels, and a responsive bento layout. Vercel builds the Next.js application from `web/`.
+
+The unused Python prototype, its tests and configuration, sample API route, and starter assets have been removed. Old recordings, fingerprint exports, and generated datasets are no longer tracked in Git; existing local copies are preserved and ignored. Previous implementations remain recoverable from Git history.
 
 ## Pages
 
