@@ -4,18 +4,14 @@ venv/
 !.env.example
 __pycache__/
 *.py[cod]
-evaluation/dataset/transformed/salt_pepper.mp4
-evaluation/dataset/transformed/moderate_noise.mp4
-evaluation/results/
-evaluation/dataset/generated/
-database/*.sqlite3
-database/*.sqlite3-shm
-database/*.sqlite3-wal
-database/fingerprints.txt
-database/*_fingerprints.txt
-database/*_fingerprints.txt.json
-videos/upload_*.mp4
-videos/camera_recording_*.mp4
+# Local artifacts retained from the retired Python prototype.
+/database/
+/decoder/
+/documentation/
+/encoder/
+/evaluation/
+/tests/
+/videos/
 *.tmp
 .pytest_cache/
 node_modules/
