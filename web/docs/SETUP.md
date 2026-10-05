@@ -1,4 +1,4 @@
-> For this repository, run commands from `web/`. Use a separate Supabase project and apply `web/supabase/schema.sql`; do not apply the older root migrations or reuse the existing secure evidence bucket. Copy `web/.env.example` to `web/.env.local` and supply the new project URL and public publishable/anon key.
+> For this repository, run commands from `web/`. Use a separate Supabase project and apply `web/supabase/schema.sql`. The incompatible root migrations have been removed. Copy `web/.env.example` to `web/.env.local` and supply the new project URL and public publishable/anon key.
 
 # Development environment — installation, configuration, run
 
@@ -9,7 +9,7 @@ one Supabase backend, so this procedure is common to both. Allow about 15 minute
 
 | Tool | Version | Check | Where |
 |---|---|---|---|
-| Node.js (includes npm) | 20 LTS or newer (tested with 22) | `node -v` | https://nodejs.org |
+| Node.js (includes npm) | 20.9 or newer | `node -v` | https://nodejs.org |
 | Git | any | `git --version` | https://git-scm.com |
 | A Supabase account | free tier is enough | — | https://supabase.com |
 | Chrome, Edge, Firefox or Safari | recent | — | Encoder needs camera access |
@@ -20,8 +20,8 @@ No database, Docker or native SDK is required on the computer: the database is h
 ## 2. Get the code and install dependencies
 
 ```bash
-git clone <repository-url> video-fingerprint-app
-cd video-fingerprint-app
+git clone https://github.com/kunjasrujanasri-afk/Dashcam_Assurance_Project.git
+cd Dashcam_Assurance_Project/web
 npm ci            # installs exactly the versions in package-lock.json
 ```
 
@@ -45,7 +45,7 @@ Main dependencies (see `package.json`): Next.js 16, React 19, TypeScript 5, Tail
 
 ## 4. Environment variables
 
-Create a file named `.env.local` at the project root (it is git-ignored):
+Create a file named `.env.local` inside `web/` (it is git-ignored):
 
 ```env
 NEXT_PUBLIC_SUPABASE_URL=https://<project-ref>.supabase.co

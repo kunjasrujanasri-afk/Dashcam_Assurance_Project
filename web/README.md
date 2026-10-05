@@ -19,7 +19,7 @@ npm ci
 npm run dev -- --port 3010
 ```
 
-Use the separate Dashcam Reference App backend and apply `supabase/schema.sql`. Do not apply the old root migrations to this project.
+Use the separate Dashcam Reference App backend and apply `supabase/schema.sql`. The incompatible root migrations have been removed; this is the current app's schema.
 
 ## Checks
 
