@@ -4,7 +4,7 @@ Dashcam Assurance is a browser application for recording journeys, anchoring sig
 
 [Live application](https://dashcamassuranceproject.vercel.app/) · [Web application guide](web/README.md) · [Setup](web/docs/SETUP.md)
 
-The application lives in **`web/`**. Its interface uses a vertical navigation rail, frosted glass panels, and a responsive bento layout. Vercel builds the Next.js application from `web/`.
+The application lives in **`web/`**. Its interface uses a vertical navigation rail, liquid glass panels, and a responsive bento layout. Vercel builds the Next.js application from `web/`.
 
 The unused Python prototype, its tests and configuration, sample API route, and starter assets have been removed. Old recordings, fingerprint exports, and generated datasets are no longer tracked in Git; existing local copies are preserved and ignored. Previous implementations remain recoverable from Git history.
 
@@ -12,10 +12,10 @@ The unused Python prototype, its tests and configuration, sample API route, and 
 
 | Route | Purpose |
 | --- | --- |
-| `/` — Capture studio | Start/stop the camera, lock incident clips, view local recordings, download clips, submit evidence, and simulate network loss. |
-| `/admin` — Evidence workspace | Monitor cloud fingerprints in real time, audit session chains, retrieve submitted clips, verify local files, and export verification results. |
-| `/demo` — Integrity playground | Create modified copies of evidence to demonstrate trimming, corruption, missing segments, and other tampering scenarios. |
-| `/evaluation` — Evaluation lab | Adjust similarity thresholds and run synthetic fingerprint comparisons. |
+| `/` — Drive Studio | Record journeys, protect incident clips, browse videos grouped by session, save clips or TXT hash lists, and submit evidence. |
+| `/admin` — Evidence Desk | Monitor cloud fingerprints and audit session chains. One File review panel accepts videos or a TXT hash list and exports results. |
+| `/demo` — Integrity Trials | Choose a trial from a vertical dropdown to compare altered copies with registered evidence. |
+| `/evaluation` — Signal Lab | Adjust similarity thresholds and run synthetic fingerprint comparisons. |
 
 The explanatory “How verification works” tab has been removed from the interface. Technical explanations are maintained here and in the documentation.
 
@@ -30,7 +30,7 @@ Camera → canvas composition → encoded segment file
                                                          ↓
                                                 Supabase fingerprints
                                                          ↓
-                                                Realtime Decoder audit
+                                                Realtime Evidence Desk audit
 
 Selected incident files → Supabase evidence storage → download → verify
 ```
@@ -71,7 +71,7 @@ The exact-file hash detects byte changes. The signature checks the signing key. 
 
 `transmitter.ts` persists every signed fingerprint in an outbox. It registers the public device key, uploads batches, and removes an outbox entry only after a successful response.
 
-Retries use exponential backoff, capped at 30 seconds. Unique session/sequence constraints and duplicate-safe upserts prevent repeated uploads from creating duplicate records. Transient network/server failures are retried; permanently rejected records retain their error details. The “Simulate network loss” control exercises this buffering path.
+Retries use exponential backoff, capped at 30 seconds. Unique session/sequence constraints and duplicate-safe upserts prevent repeated uploads from creating duplicate records. Transient network/server failures are retried; permanently rejected records retain their error details. The “Pause uplink” control exercises this buffering path.
 
 Ordinary video segments remain on the device. Sending selected evidence explicitly uploads the video files.
 
@@ -96,11 +96,13 @@ The retained reference schema allows anonymous and authenticated clients to inse
 
 `repository.ts` retrieves fingerprint records, device public keys, and evidence files. `verifier.ts` hashes submitted files, matches their bytes to cloud fingerprints, verifies signatures, recomputes chain hashes, and checks sequence continuity.
 
-The Decoder presents authentic, modified, forged, unknown, duplicate, and missing evidence findings. A session audit verifies the server's chain independently of the submitted file set. `tamperLab.ts` creates altered copies in memory for demonstrations; it does not change the stored originals.
+Evidence Desk presents original verified, changes detected, and timeline incomplete results, with per-file authenticity findings. Clips are grouped by the signed session ID; filenames are only grouping hints before verification.
+
+`hashManifest.ts` accepts one SHA-256 hash per non-empty line, including optional sha256sum filenames. It normalizes case, reports invalid line numbers, limits lists to 2,000 entries, queries unique hashes in batches of 100, and audits matched cloud records. TXT results distinguish registered, missing, repeated, and invalid entries. A hash list checks registration and signed records; it does not verify video content. Use video review to check the actual file bytes. A session audit verifies the server's chain independently of the submitted file set. `tamperLab.ts` creates altered copies in memory for demonstrations; it does not change the stored originals.
 
 ### 7. Evaluation
 
-`fingerprintMetrics.ts` implements perceptual/fuzzy fingerprint and vector-distance comparisons. The Evaluation lab runs synthetic scenarios and reports threshold-dependent precision, recall, F1, and accuracy. Its displayed metrics are simulations, not measurements of real camera footage. Cryptographic evidence verification remains the exact-byte SHA-256/signature/chain path.
+`fingerprintMetrics.ts` implements perceptual/fuzzy fingerprint and vector-distance comparisons. The Signal Lab runs synthetic scenarios and reports threshold-dependent precision, recall, F1, and accuracy. Its displayed metrics are simulations, not measurements of real camera footage. Cryptographic evidence verification remains the exact-byte SHA-256/signature/chain path.
 
 ## Code map
 
@@ -110,13 +112,14 @@ To follow one recording through the code, start with the controls in `src/pages/
 
 | Location in `web/` | What to change there |
 | --- | --- |
-| `src/components/app-shell.tsx` | Shared vertical navigation, brand, page frame, and icons. |
+| `src/components/app-shell.tsx` | Shared vertical navigation, brand, and page frame. |
 | `src/components/ui.tsx` | Cards, metrics, status badges, page headings, and action buttons. |
 | `src/styles/globals.css` | Glass surfaces, bento styling, palette, responsive rail, and focus styles. |
 | `src/pages/index.tsx` | Capture screen and recording controls. |
 | `src/pages/admin.tsx` | Live monitoring, chain audits, and evidence verification screens. |
 | `src/pages/demo.tsx` | Interactive tampering workflows. |
 | `src/pages/evaluation.tsx` | Evaluation controls, filtering, and results. |
+| `src/lib/hashManifest.ts` | TXT parsing, bounded cloud lookups, and signed-record checks. |
 | `src/lib/` | Capture, storage, transmission, retention, and verification logic. |
 | `scripts/selftest.ts` | Integrity and verification regression checks. |
 | `supabase/schema.sql` | Database tables, policies, storage, triggers, and retention. |
@@ -156,10 +159,10 @@ npm run build
 npm run start -- --port 3010
 ```
 
-The integrity self-test covers authentic evidence, bit corruption, overwritten blocks, truncation, missing files and records, renamed files, modified server metadata, foreign-key signatures, unrelated files, and duplicate submissions.
+The integrity self-test covers authentic evidence, bit corruption, overwritten blocks, truncation, missing files and records, renamed files, modified server metadata, foreign-key signatures, unrelated files, and duplicate submissions, TXT parsing and size limits, hash registration, invalid cloud records, and bounded manifest queries.
 
 Vercel's root directory is `web`. Set the two public Supabase variables for Production and Preview before building. Environment changes require a new deployment because these values are embedded in the client bundle.
 
 ## Reference and project history
 
-See [reference analysis](web/docs/REFERENCE_ANALYSIS.md), [Encoder guide](web/docs/ENCODER.md), [Decoder guide](web/docs/DECODER.md), and [evaluation guide](web/docs/EVALUATION.md) for additional details.
+See [implementation guide](web/docs/IMPLEMENTATION), [recording guide](web/docs/ENCODER.md), [evidence review guide](web/docs/DECODER.md), and [evaluation guide](web/docs/EVALUATION.md) for additional details.

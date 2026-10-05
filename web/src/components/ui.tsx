@@ -1,8 +1,6 @@
 /** Small presentational components shared by the Encoder and Decoder pages. */
 
-import Link from "next/link";
 import { useRouter } from "next/router";
-import { WorkspaceIcon } from "./app-shell";
 import type { ReactNode } from "react";
 
 export type Tone = "green" | "amber" | "red" | "sky" | "slate" | "indigo";
@@ -40,7 +38,7 @@ export function Badge({ tone, children, pulse, title }: { tone: Tone; children: 
 export function Stat({ label, value, tone = "slate", sub }: { label: string; value: ReactNode; tone?: Tone; sub?: ReactNode }) {
   return (
     <div className={`metric-tile metric-${tone} min-w-0`}>
-      <div className="metric-caption"><p>{label}</p><span aria-hidden="true">◇</span></div>
+      <div className="metric-caption"><p>{label}</p></div>
       <p className={`metric-value ${valueTone[tone]}`}>{value}</p>
       {sub && <p className="metric-detail">{sub}</p>}
     </div>
@@ -92,19 +90,42 @@ export function Button({
   );
 }
 
-export function TopNav({ kicker, title, href, hrefLabel, right }: { icon: string; kicker: string; title: string; href: string; hrefLabel: string; right?: ReactNode }) {
+export function TopNav({ kicker, title }: { kicker: string; title: string }) {
   const { pathname } = useRouter();
   const descriptions: Record<string, string> = {
-    "/": "A little peace of mind, for every mile ahead.",
-    "/admin": "Bring every detail into focus. Verify the story behind the footage.",
-    "/demo": "Explore how small changes leave a trace.",
-    "/evaluation": "A clearer perspective on fingerprints, metrics, and thresholds.",
+    "/": "The road ahead. Beautifully preserved.",
+    "/admin": "A clear view of every recorded moment.",
+    "/demo": "Change a copy. Discover what the evidence reveals.",
+    "/evaluation": "Fine-tune your perspective on similarity.",
   };
   return (
     <header className="page-heading">
-      <div className="page-heading-copy"><p className="page-eyebrow"><span />{kicker}</p><h1>{title}</h1><p className="page-description">{descriptions[pathname]}</p></div>
-      <div className="page-shortcuts">{right}<Link href={href}>{hrefLabel}<WorkspaceIcon name="arrow" /></Link></div>
+      <div className="page-heading-copy">
+        <p className="page-eyebrow">{kicker}</p>
+        <h1>{title}<span className="heading-period">.</span></h1>
+        <p className="page-description">{descriptions[pathname]}</p>
+      </div>
+      <span className="page-edition">DASHCAM ASSURANCE <span>YOUR EVIDENCE, IN FOCUS</span></span>
     </header>
+  );
+}
+
+export function SegmentedControl<T extends string>({ label, items, value, onChange }: {
+  label: string;
+  items: { value: T; label: string }[];
+  value: T;
+  onChange: (value: T) => void;
+}) {
+  return (
+    <div className="liquid-segments" role="group" aria-label={label}>
+      {items.map((item) => (
+        <button type="button" key={item.value} aria-pressed={value === item.value}
+          onClick={() => onChange(item.value)}
+          className={value === item.value ? "is-selected" : ""}>
+          {item.label}
+        </button>
+      ))}
+    </div>
   );
 }
 

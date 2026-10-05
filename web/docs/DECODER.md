@@ -1,4 +1,4 @@
-# Decoder — report
+# Evidence Desk — verification guide
 
 Web application used by the insurer to retrieve the recorded data and verify its integrity.
 
@@ -8,13 +8,15 @@ Web application used by the insurer to retrieve the recorded data and verify its
 
 ## 1. Functionalities
 
-| Tab | What it does |
+| View | Purpose |
 |---|---|
-| **Live monitor** | Loads the latest records and subscribes to Supabase Realtime. Every incoming record is checked on arrival (chain hash, device signature, link to the previous segment). Sessions are listed with their anchoring delay; **Audit chain** re-verifies a whole session stored on the server. **Run retention purge** removes expired hashes. |
-| **Verify evidence** | *Retrieve* the clips submitted by drivers from the Storage bucket `evidence` (or open files downloaded from the phone), *play* them, *verify* them, export the report as JSON. |
-| **Tamper lab** (in the same tab) | Creates modified copies in memory — flip 1 bit, overwrite 4 KB, truncate 20 %, swap file names, remove a segment — and simulates an altered server record, to demonstrate detection. |
+| **Cloud timeline** | Loads the latest records and subscribes to Supabase Realtime. Checks incoming signatures, hashes, and chain links. Journey index groups records by session; **Inspect chain** audits one session. **Clear expired receipts** runs retention. |
+| **File review — Video clips** | Choose or drop video files in the single input panel, preview them, verify exact bytes and cloud records, and save a JSON report. Selected clips and findings are grouped by recording session. |
+| **File review — TXT hash list** | Paste SHA-256 hashes or choose a TXT file. Checks hash registration and signed cloud records. It does not check video content. |
 
-The protocol explanation is maintained in the [root README](../../README.md) and below; the interface contains the Live monitor and Verify evidence tabs.
+TXT lists accept one 64-character hexadecimal SHA-256 per non-empty line, optionally followed by a filename. The parser accepts uppercase hashes, a UTF-8 BOM, and CRLF line endings. Invalid lines are identified; lists are limited to 2,000 hashes. Repeated hashes are reported separately. Cloud queries use batches of 100 unique hashes.
+
+Tampering demonstrations are available in Integrity Trials at `/demo`, with a vertical trial dropdown. Cloud evidence retrieval remains part of those workflows and the repository module. Technical explanations are kept in the [root README](../../README.md) and below.
 
 ## 2. Integrity mechanism
 
@@ -79,9 +81,7 @@ signature_i       = ECDSA-P256-SHA256(device_private_key, chain_hash_i)
   table** prove the fingerprint existed shortly after capture, i.e. before any accident dispute.
 * Only standard, audited primitives from the browser's Web Crypto API are used; the same code
   (`integrity.ts`) computes the values on both sides, so there is no format ambiguity.
-* The engine is covered by an automated test (`npm run selftest`, 15 cases, see SETUP.md §7), and was
-  tested end-to-end in a headless Chromium with a fake camera against an emulated backend (recording → offline buffering →
-  reconnection → upload → retrieval → verification → tampering).
+* The engine is covered by an automated test (`npm run selftest`, 24 cases, see SETUP.md §7), including exact-byte tampering and TXT manifest checks.
 
 ### 2.5 Limits
 * Trust in the anchoring time relies on the database operator; a public timestamp authority (RFC 3161)

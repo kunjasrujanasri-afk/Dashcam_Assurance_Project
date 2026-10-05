@@ -1,24 +1,13 @@
-/**
- * src/pages/admin.tsx — DECODER (insurer side)
- *
- *  1. Live monitor   – hashes arriving from dashcams in real time, each record
- *                      checked on arrival (chain hash + device signature + link).
- *  2. Verify evidence – retrieve clips (evidence bucket or local files) and run
- *                      the full integrity verification (lib/verifier.ts).
- *  3. Tamper lab      – modify / corrupt / remove / reorder evidence to show
- *                      that the verification detects it.
- *  4. How it works    – description of the protocol.
- */
+/** Evidence Desk: cloud timeline, grouped journeys, and one video/TXT input panel. */
 
 import Head from "next/head";
-import Link from "next/link";
 import { ChangeEvent, DragEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Badge, Button, Card, ConfigWarning, Stat, Tone, TopNav } from "@/components/ui";
+import { Badge, Button, Card, ConfigWarning, Stat, SegmentedControl, Tone, TopNav } from "@/components/ui";
 import { ANCHOR_DELAY_WARN_MS } from "@/lib/config";
-import { computeChainHash, genesisHash, importPublicJwk, verifyChainSignature } from "@/lib/integrity";
-import { downloadEvidence, EvidenceFolder, listEvidenceFolders, runServerPurge, supabaseRepository } from "@/lib/repository";
+import { computeChainHash, genesisHash, importPublicJwk, parseSegmentFileName, verifyChainSignature } from "@/lib/integrity";
+import { runServerPurge, supabaseRepository } from "@/lib/repository";
 import { DeviceRow, SegmentRow, supabase, supabaseConfigured } from "@/lib/supabaseClient";
-import { flipOneBit, overwriteBlock, swapNames, tamperServerRecord, truncate } from "@/lib/tamperLab";
+import { verifyHashManifest, type ManifestReport } from "@/lib/hashManifest";
 import {
   auditSession,
   clearKeyCache,
@@ -39,36 +28,22 @@ interface LiveRow extends SegmentRow {
   checkNote?: string;
 }
 
-export default function DecoderPage() {
+export default function EvidenceDeskPage() {
   const [tab, setTab] = useState<Tab>("live");
 
   return (
     <>
       <Head>
-        <title>Dashcam Decoder</title>
+        <title>Evidence Desk · Dashcam Assurance</title>
         <meta name="viewport" content="width=device-width, initial-scale=1" />
       </Head>
       <div className="min-h-screen bg-slate-950 text-white">
-        <TopNav icon="🛡️" kicker="VERIFICATION WORKSPACE" title="Evidence workspace" href="/" hrefLabel="Encoder" right={<Link href="/demo" className="text-xs text-slate-400 hover:text-white whitespace-nowrap">Fraud Demo →</Link>} />
+        <TopNav kicker="02 / EVIDENCE REVIEW" title="Evidence Desk" />
         <main className="max-w-6xl mx-auto px-4 py-5 space-y-5">
           {!supabaseConfigured && <ConfigWarning />}
-          <div className="flex gap-2 border-b border-slate-800 pb-2 overflow-x-auto">
-            {(
-              [
-                ["live", "Live monitor"],
-                ["verify", "Verify evidence"],
-              ] as [Tab, string][]
-            ).map(([k, label]) => (
-              <button
-                key={k}
-                onClick={() => setTab(k)}
-                className={`px-3.5 py-2 rounded-lg text-sm font-semibold whitespace-nowrap ${
-                  tab === k ? "bg-indigo-600 text-white" : "text-slate-400 hover:bg-slate-800 hover:text-white"
-                }`}
-              >
-                {label}
-              </button>
-            ))}
+          <div className="desk-switcher"><p className="section-caption">CHOOSE YOUR VIEW</p>
+            <SegmentedControl<Tab> label="Evidence view" value={tab} onChange={setTab}
+              items={[{ value: "live", label: "Cloud timeline" }, { value: "verify", label: "File review" }]} />
           </div>
           {/* keep both mounted so state survives tab switches */}
           <div className={tab === "live" ? "" : "hidden"}>
@@ -203,69 +178,39 @@ function LiveMonitor() {
     <div className="space-y-5">
       <div className="flex flex-wrap items-center gap-2">
         <Badge tone={rt === "live" ? "green" : rt === "error" ? "red" : "amber"} pulse={rt === "live"}>
-          Realtime {rt}
+          Cloud feed {rt}
         </Badge>
-        <Button small onClick={load}>↻ Reload</Button>
-        <Button small onClick={purge} title="Delete server hashes whose retention period has expired">🗑 Run retention purge</Button>
+        <Button small onClick={load}>Refresh feed</Button>
+        <Button small onClick={purge} title="Delete server hashes whose retention period has expired">Clear expired receipts</Button>
         {purgeMsg && <span className="text-xs text-slate-400">{purgeMsg}</span>}
       </div>
       {loadErr && <p className="text-sm text-red-400">⚠ {loadErr}</p>}
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Stat label="Records (latest 300)" value={rows.length} tone="indigo" />
-        <Stat label="Signature + chain OK" value={ok} tone="green" />
-        <Stat label="Integrity failures" value={bad} tone={bad ? "red" : "slate"} />
-        <Stat label="Delayed anchoring" value={delayed} tone={delayed ? "amber" : "slate"} sub="sent after offline buffering" />
+        <Stat label="Cloud receipts" value={rows.length} tone="indigo" />
+        <Stat label="Validated seals" value={ok} tone="green" />
+        <Stat label="Review flags" value={bad} tone={bad ? "red" : "slate"} />
+        <Stat label="Buffered uploads" value={delayed} tone={delayed ? "amber" : "slate"} sub="sent after offline buffering" />
       </div>
 
-      <Card title="Recording sessions" subtitle="One session = one Start→Stop on a phone. Audit re-verifies the complete hash chain stored on the server.">
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs">
-            <thead className="text-slate-500 text-left">
-              <tr>
-                <th className="p-2">Session</th>
-                <th className="p-2">Device</th>
-                <th className="p-2">Recorded</th>
-                <th className="p-2">Segments</th>
-                <th className="p-2">Max anchor delay</th>
-                <th className="p-2">Status</th>
-                <th className="p-2"></th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-800">
-              {sessions.map((s) => (
-                <tr key={s.id}>
-                  <td className="p-2 font-mono">{s.id.slice(0, 8)}</td>
-                  <td className="p-2 font-mono text-slate-400">{s.device.slice(0, 8)}</td>
-                  <td className="p-2 font-mono text-slate-400">
-                    {new Date(s.first).toLocaleDateString()} {formatClock(s.first)} → {formatClock(s.last)}
-                  </td>
-                  <td className="p-2 font-mono">{s.count}</td>
-                  <td className="p-2 font-mono text-slate-400">{formatDuration(Math.max(0, s.maxDelay))}</td>
-                  <td className="p-2">{s.bad ? <Badge tone="red">{s.bad} failing</Badge> : <Badge tone="green">consistent</Badge>}</td>
-                  <td className="p-2 text-right">
-                    <Button small onClick={() => runAudit(s.id)} disabled={!!auditing}>
-                      {auditing === s.id ? "Auditing…" : "Audit chain"}
-                    </Button>
-                  </td>
-                </tr>
-              ))}
-              {!sessions.length && (
-                <tr>
-                  <td colSpan={7} className="p-6 text-center text-slate-500">No records yet. Start the dashcam on the Encoder.</td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+      <div className="ledger-grid">
+      <Card title="Journey index" subtitle="Choose a session to inspect its signed chain.">
+        <div className="journey-list">
+          {sessions.map((s) => (
+            <article key={s.id} className="journey-entry">
+              <div className="flex items-center justify-between gap-3"><strong className="font-mono">{s.id.slice(0, 8)}</strong>
+                {s.bad ? <Badge tone="red">{s.bad} issues</Badge> : <Badge tone="green">Consistent</Badge>}
+              </div>
+              <p>{new Date(s.first).toLocaleDateString()} · {formatClock(s.first)}–{formatClock(s.last)}</p>
+              <dl><div><dt>Clips</dt><dd>{s.count}</dd></div><div><dt>Device</dt><dd>{s.device.slice(0, 8)}</dd></div><div><dt>Sync delay</dt><dd>{formatDuration(Math.max(0, s.maxDelay))}</dd></div></dl>
+              <Button small onClick={() => runAudit(s.id)} disabled={!!auditing}>{auditing === s.id ? "Inspecting…" : "Inspect chain"}</Button>
+            </article>
+          ))}
+          {!sessions.length && <p className="empty-note">Your journeys will appear after recording in Drive Studio.</p>}
         </div>
-        {audit && (
-          <div className="mt-4">
-            <SessionAuditCard audit={audit} />
-          </div>
-        )}
       </Card>
 
-      <Card title="Incoming fingerprints" subtitle="Each record is verified on arrival: chain hash recomputed, device signature checked, link to previous segment checked.">
+      <Card title="Receipt stream" subtitle="Each record is verified on arrival: chain hash recomputed, device signature checked, link to previous segment checked.">
         <div className="overflow-x-auto max-h-[55vh] overflow-y-auto">
           <table className="w-full text-xs">
             <thead className="text-slate-500 text-left sticky top-0 bg-slate-900">
@@ -294,7 +239,7 @@ function LiveMonitor() {
                     <td className="p-2 font-mono text-slate-500 hidden md:table-cell">{short(r.chain_hash, 14)}</td>
                     <td className="p-2">
                       {r.check === "ok" ? (
-                        <Badge tone="green">signed ✓</Badge>
+                        <Badge tone="green">Validated</Badge>
                       ) : r.check === "bad" ? (
                         <Badge tone="red" title={r.checkNote}>{r.checkNote}</Badge>
                       ) : (
@@ -308,6 +253,8 @@ function LiveMonitor() {
           </table>
         </div>
       </Card>
+      </div>
+      {audit && <SessionAuditCard audit={audit} />}
     </div>
   );
 }
@@ -325,368 +272,175 @@ const statusTone: Record<FileStatus, Tone> = {
 };
 
 function VerifyEvidence() {
+  const [mode, setMode] = useState<"video" | "hashes">("video");
   const [files, setFiles] = useState<EvidenceFile[]>([]);
-  const [folders, setFolders] = useState<EvidenceFolder[] | null>(null);
-  const [cloudBusy, setCloudBusy] = useState<string | null>(null);
-  const [cloudErr, setCloudErr] = useState<string | null>(null);
+  const [hashText, setHashText] = useState("");
+  const [manifestName, setManifestName] = useState("");
   const [report, setReport] = useState<VerificationReport | null>(null);
-  const [progress, setProgress] = useState<{ done: number; total: number; label: string } | null>(null);
+  const [manifestReport, setManifestReport] = useState<ManifestReport | null>(null);
+  const [working, setWorking] = useState(false);
+  const [progress, setProgress] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [dbTamper, setDbTamper] = useState(false);
-  const [dbTamperSeq, setDbTamperSeq] = useState(1);
   const [player, setPlayer] = useState<{ url: string; name: string } | null>(null);
   const [drag, setDrag] = useState(false);
 
+  const selectedVideos = useMemo(() => {
+    const groups = new Map<string, EvidenceFile[]>();
+    for (const file of files) {
+      const session = parseSegmentFileName(file.name)?.session_id ?? "unidentified";
+      groups.set(session, [...(groups.get(session) ?? []), file]);
+    }
+    return [...groups.entries()];
+  }, [files]);
+
   const addFiles = (list: FileList | File[]) => {
-    const add = [...list]
-      .filter((f) => f.type.startsWith("video/") || /\.(webm|mp4|mkv|mov)$/i.test(f.name))
-      .map((f) => ({ id: crypto.randomUUID(), name: f.name, blob: f as Blob, origin: "local" as const }));
-    setFiles((p) => sortFiles([...p, ...add]));
+    const chosen = [...list].filter((file) => file.type.startsWith("video/") || /\.(webm|mp4|mkv|mov)$/i.test(file.name));
+    if (!chosen.length) { setErr("Choose video clips in WebM, MP4, MKV, or MOV format."); return; }
+    setFiles((current) => [...current, ...chosen.map((file) => ({
+      id: crypto.randomUUID(), name: file.name, blob: file as Blob, origin: "local" as const,
+    }))].sort((left, right) => left.name.localeCompare(right.name)));
     setReport(null);
-  };
-
-  const onPick = (e: ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) addFiles(e.target.files);
-    e.target.value = "";
-  };
-  const onDrop = (e: DragEvent) => {
-    e.preventDefault();
-    setDrag(false);
-    addFiles(e.dataTransfer.files);
-  };
-
-  const browseCloud = async () => {
-    setCloudErr(null);
-    setCloudBusy("Listing…");
-    try {
-      setFolders(await listEvidenceFolders());
-    } catch (e) {
-      setCloudErr((e as Error).message);
-    } finally {
-      setCloudBusy(null);
-    }
-  };
-
-  const loadFolder = async (f: EvidenceFolder) => {
-    setCloudErr(null);
-    try {
-      const got: EvidenceFile[] = [];
-      for (let i = 0; i < f.files.length; i++) {
-        setCloudBusy(`Downloading ${i + 1}/${f.files.length}…`);
-        got.push(await downloadEvidence(f.files[i].path));
-      }
-      setFiles((p) => sortFiles([...p, ...got]));
-      setReport(null);
-    } catch (e) {
-      setCloudErr((e as Error).message);
-    } finally {
-      setCloudBusy(null);
-    }
-  };
-
-  const replace = (id: string, nf: EvidenceFile) => {
-    setFiles((p) => p.map((f) => (f.id === id ? nf : f)));
-    setReport(null);
-  };
-
-  const tamper = async (f: EvidenceFile, op: "bit" | "block" | "trunc" | "remove" | "swap") => {
-    if (op === "remove") {
-      setFiles((p) => p.filter((x) => x.id !== f.id));
-    } else if (op === "swap") {
-      const i = files.findIndex((x) => x.id === f.id);
-      const other = files[i + 1];
-      if (!other) return;
-      const [a, b] = swapNames(f, other);
-      setFiles((p) => p.map((x) => (x.id === f.id ? a : x.id === other.id ? b : x)));
-    } else {
-      replace(f.id, await (op === "bit" ? flipOneBit(f) : op === "block" ? overwriteBlock(f) : truncate(f)));
-    }
-    setReport(null);
-  };
-
-  const run = async () => {
     setErr(null);
-    setReport(null);
-    clearKeyCache();
+  };
+  const readManifest = async (file: File) => {
+    if (!/\.txt$/i.test(file.name)) { setErr("Choose a TXT hash list."); return; }
+    if (file.size > 1_000_000) { setErr("Choose a TXT file smaller than 1 MB."); return; }
+    try { setHashText(await file.text()); setManifestName(file.name); setManifestReport(null); setErr(null); }
+    catch { setErr("The TXT file could not be read."); }
+  };
+  const onPick = (event: ChangeEvent<HTMLInputElement>) => {
+    if (event.target.files) addFiles(event.target.files);
+    event.target.value = "";
+  };
+  const onDrop = (event: DragEvent) => {
+    event.preventDefault(); setDrag(false);
+    if (working) return;
+    if (mode === "video") addFiles(event.dataTransfer.files);
+    else if (event.dataTransfer.files[0]) void readManifest(event.dataTransfer.files[0]);
+  };
+  const run = async () => {
+    setWorking(true); setErr(null); setProgress("Checking registered evidence…"); clearKeyCache();
     try {
-      const r = await verifyEvidence(files, supabaseRepository, {
-        mutateRows: dbTamper ? tamperServerRecord(dbTamperSeq) : undefined,
-        onProgress: (done, total, label) => setProgress({ done, total, label }),
-      });
-      setReport(r);
-    } catch (e) {
-      setErr((e as Error).message);
-    } finally {
-      setProgress(null);
-    }
+      if (mode === "video") {
+        setReport(null);
+        setReport(await verifyEvidence(files, supabaseRepository, {
+          onProgress: (_done, _total, label) => setProgress(label),
+        }));
+      } else {
+        setManifestReport(null);
+        setManifestReport(await verifyHashManifest(hashText, supabaseRepository));
+      }
+    } catch (error) { setErr((error as Error).message); }
+    finally { setWorking(false); setProgress(null); }
   };
-
-  const play = (f: EvidenceFile) => {
+  const play = (file: EvidenceFile) => {
     if (player) URL.revokeObjectURL(player.url);
-    setPlayer({ url: URL.createObjectURL(f.blob), name: f.name });
+    setPlayer({ url: URL.createObjectURL(file.blob), name: file.name });
   };
-
-  const exportReport = () => {
-    if (!report) return;
-    const json = {
-      verdict: report.verdict,
-      verifiedAt: new Date(report.startedAt).toISOString(),
-      summary: report.summary,
-      files: report.files.map((v) => ({
-        name: v.file.name,
-        origin: v.file.origin,
-        note: v.file.note,
-        status: v.status,
-        sha256: v.actualHash,
-        expected_sha256: v.record?.segment_hash ?? null,
-        session_id: v.record?.session_id ?? null,
-        seq: v.record?.seq ?? null,
-        problems: v.problems,
-        warnings: v.warnings,
-      })),
-      sessions: report.sessions.map((s) => ({
-        session_id: s.sessionId,
-        device_id: s.deviceId,
-        key_fingerprint: s.keyFingerprint,
-        records: s.records.length,
-        missing_in_db: s.missingInDb,
-        missing_in_evidence: s.missingInEvidence,
-        problems: s.problems,
-        warnings: s.warnings,
-      })),
+  const saveReport = () => {
+    const result = mode === "hashes" ? manifestReport : report && {
+      verdict: report.verdict, summary: report.summary, durationMs: report.durationMs,
+      files: report.files.map((entry) => ({
+        name: entry.file.name, status: entry.status, sha256: entry.actualHash,
+        session_id: entry.record?.session_id, seq: entry.record?.seq,
+        problems: entry.problems, warnings: entry.warnings,
+      })), sessions: report.sessions,
     };
-    downloadBlob(new Blob([JSON.stringify(json, null, 2)], { type: "application/json" }), `verification-report-${Date.now()}.json`);
+    if (result) downloadBlob(new Blob([JSON.stringify(result, null, 2)], { type: "application/json" }), `evidence-review-${Date.now()}.json`);
   };
-
-  const verdictBox = report && (
-    <div
-      className={`rounded-2xl border p-5 ${
-        report.verdict === "AUTHENTIC"
-          ? "border-emerald-500/50 bg-emerald-500/10"
-          : report.verdict === "INCOMPLETE"
-          ? "border-amber-500/50 bg-amber-500/10"
-          : "border-red-500/50 bg-red-500/10"
-      }`}
-    >
-      <p className="text-xs uppercase tracking-widest text-slate-400">Verdict</p>
-      <p
-        className={`text-3xl font-black ${
-          report.verdict === "AUTHENTIC" ? "text-emerald-400" : report.verdict === "INCOMPLETE" ? "text-amber-400" : "text-red-400"
-        }`}
-      >
-        {report.verdict === "AUTHENTIC" ? "✔ AUTHENTIC" : report.verdict === "INCOMPLETE" ? "◐ INCOMPLETE" : "✖ TAMPERED"}
-      </p>
-      <p className="text-xs text-slate-300 mt-1">
-        {report.verdict === "AUTHENTIC"
-          ? "Every file is bit-for-bit identical to what the dashcam registered, signatures are valid and the sequence is complete."
-          : report.verdict === "INCOMPLETE"
-          ? "Submitted files are genuine, but segments are missing from the submitted time range."
-          : "At least one file or record is not consistent with what the dashcam registered at capture time."}
-      </p>
-      <ul className="mt-3 text-xs text-slate-300 space-y-0.5 list-disc pl-5">
-        {report.summary.map((s, i) => (
-          <li key={i}>{s}</li>
-        ))}
-      </ul>
-      <div className="mt-3 flex gap-2">
-        <Button small onClick={exportReport}>⬇ Export report (JSON)</Button>
-        <span className="text-[11px] text-slate-500 self-center">verified in {report.durationMs} ms</span>
-      </div>
-    </div>
-  );
 
   return (
     <div className="space-y-5">
-      <div className="grid md:grid-cols-2 gap-5">
-        <Card title="1 · Retrieve evidence from the cloud" subtitle="Clips submitted by drivers (Supabase Storage bucket “evidence”).">
-          <Button onClick={browseCloud} disabled={!!cloudBusy}>{cloudBusy ?? "☁ Browse submitted clips"}</Button>
-          {cloudErr && <p className="text-xs text-red-400 mt-2">⚠ {cloudErr}</p>}
-          {folders && (
-            <ul className="mt-3 space-y-2 max-h-56 overflow-y-auto">
-              {folders.map((f) => (
-                <li key={f.sessionId} className="flex items-center justify-between gap-2 text-xs bg-slate-900/60 rounded-lg px-3 py-2">
-                  <span className="font-mono">
-                    session {f.sessionId.slice(0, 8)} · {f.files.length} file(s) · {formatBytes(f.files.reduce((a, x) => a + x.size, 0))}
-                  </span>
-                  <Button small tone="primary" onClick={() => loadFolder(f)} disabled={!!cloudBusy}>Load</Button>
-                </li>
-              ))}
-              {!folders.length && <li className="text-xs text-slate-500">No submitted clips yet.</li>}
-            </ul>
+      <Card className="verification-input" title="Choose evidence" subtitle="One place to review video clips or a TXT list of SHA-256 fingerprints."
+        right={<SegmentedControl<"video" | "hashes"> label="Evidence input type" value={mode}
+          onChange={(next) => { if (!working) { setMode(next); setErr(null); } }}
+          items={[{ value: "video", label: "Video clips" }, { value: "hashes", label: "TXT hash list" }]} />}>
+        <div onDragOver={(event) => { event.preventDefault(); if (!working) setDrag(true); }}
+          onDragLeave={() => setDrag(false)} onDrop={onDrop}>
+          {mode === "video" ? (
+            <>
+              <label className={`verification-drop ${drag ? "is-dragging" : ""}`} htmlFor="review-videos">
+                <strong>Choose a video to review</strong><span>Drop its clips here, or select them from your device.</span>
+                <span className="trial-card-action">Choose video clips</span>
+                <input id="review-videos" aria-label="Choose video clips" type="file" accept="video/*,.webm,.mp4,.mkv,.mov" multiple onChange={onPick} disabled={working} className="sr-only" />
+              </label>
+              <div className="verification-file-list">
+                {selectedVideos.map(([session, clips]) => (
+                  <details key={session} className="video-session" open>
+                    <summary><div><strong>{session === "unidentified" ? "Selected footage" : `Video · ${session.slice(0, 8)}`}</strong><p>{clips.length} clips · {formatBytes(clips.reduce((sum, clip) => sum + clip.blob.size, 0))}</p></div><span>Review clips</span></summary>
+                    {clips.map((file) => (
+                      <div key={file.id} className="verification-file-row"><div><p>{file.name}</p><small>{formatBytes(file.blob.size)}</small></div>
+                        <div className="flex gap-2"><Button small onClick={() => play(file)}>Preview</Button><Button small onClick={() => { setFiles((current) => current.filter((item) => item.id !== file.id)); setReport(null); }} disabled={working}>Remove</Button></div>
+                      </div>
+                    ))}
+                  </details>
+                ))}
+              </div>
+            </>
+          ) : (
+            <div className="manifest-input">
+              <label htmlFor="hash-list" className="section-caption">PASTE YOUR SHA-256 HASHES</label>
+              <textarea id="hash-list" value={hashText} disabled={working}
+                onChange={(event) => { setHashText(event.target.value); setManifestName(""); setManifestReport(null); }}
+                placeholder="One 64-character SHA-256 hash per line" spellCheck={false} />
+              <div className="flex flex-wrap items-center gap-3">
+                <label htmlFor="review-manifest" className="studio-button">Choose TXT file
+                  <input id="review-manifest" aria-label="Choose TXT file" type="file" accept=".txt,text/plain" disabled={working} className="sr-only"
+                    onChange={(event) => { if (event.target.files?.[0]) void readManifest(event.target.files[0]); event.target.value = ""; }} />
+                </label><span className="text-xs text-slate-500">{manifestName || "You can also drop a TXT file here."}</span>
+              </div>
+              <p className="text-xs text-slate-400">Hashes are checked against registered records. Select video clips to verify their actual content.</p>
+            </div>
           )}
-        </Card>
-
-        <Card title="…or open video files" subtitle="Segments downloaded from the phone (dashcam_<session>_<seq>.webm / .mp4).">
-          <label
-            onDragOver={(e) => {
-              e.preventDefault();
-              setDrag(true);
-            }}
-            onDragLeave={() => setDrag(false)}
-            onDrop={onDrop}
-            className={`flex flex-col items-center justify-center border-2 border-dashed rounded-xl p-6 cursor-pointer text-sm ${
-              drag ? "border-indigo-400 bg-indigo-500/10" : "border-slate-600 text-slate-400"
-            }`}
-          >
-            <span>Drop files here or click to choose</span>
-            <input type="file" accept="video/*,.webm,.mp4" multiple onChange={onPick} className="hidden" />
-          </label>
-        </Card>
-      </div>
-
-      <Card
-        title={`2 · Evidence set (${files.length})`}
-        subtitle="Tamper-lab buttons create modified copies in memory to demonstrate detection. Originals on the server are never changed."
-        right={
-          <div className="flex gap-2">
-            <Button small onClick={() => { setFiles([]); setReport(null); }} disabled={!files.length}>Clear</Button>
-          </div>
-        }
-      >
-        {player && (
-          <div className="mb-4">
-            <video src={player.url} controls autoPlay className="w-full max-w-xl rounded-lg border border-slate-700 bg-black" />
-            <p className="text-[11px] text-slate-500 mt-1 font-mono">{player.name}</p>
-          </div>
-        )}
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs">
-            <thead className="text-slate-500 text-left">
-              <tr>
-                <th className="p-2">File</th>
-                <th className="p-2">Size</th>
-                <th className="p-2">Origin</th>
-                <th className="p-2 text-right">Tamper lab</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-800">
-              {files.map((f, i) => (
-                <tr key={f.id} className={f.origin === "tamper-lab" ? "bg-amber-500/5" : ""}>
-                  <td className="p-2 font-mono break-all">
-                    <button className="hover:text-indigo-300 text-left" onClick={() => play(f)} title="Play">▶ {f.name}</button>
-                  </td>
-                  <td className="p-2 font-mono text-slate-400 whitespace-nowrap">{formatBytes(f.blob.size)}</td>
-                  <td className="p-2">
-                    {f.origin === "tamper-lab" ? <Badge tone="amber" title={f.note}>{f.note}</Badge> : <Badge tone={f.origin === "cloud" ? "sky" : "slate"}>{f.origin}</Badge>}
-                  </td>
-                  <td className="p-2 text-right whitespace-nowrap space-x-1">
-                    <Button small onClick={() => tamper(f, "bit")} title="Flip a single bit">1 bit</Button>
-                    <Button small onClick={() => tamper(f, "block")} title="Zero 4 KB (edited frames)">edit</Button>
-                    <Button small onClick={() => tamper(f, "trunc")} title="Cut the last 20 %">truncate</Button>
-                    <Button small onClick={() => tamper(f, "swap")} disabled={i === files.length - 1} title="Swap file names with next (reorder)">swap↓</Button>
-                    <Button small tone="danger" onClick={() => tamper(f, "remove")} title="Remove this segment from the evidence">remove</Button>
-                  </td>
-                </tr>
-              ))}
-              {!files.length && (
-                <tr>
-                  <td colSpan={4} className="p-6 text-center text-slate-500">No evidence loaded.</td>
-                </tr>
-              )}
-            </tbody>
-          </table>
         </div>
-        <label className="flex flex-wrap items-center gap-2 mt-4 text-xs text-slate-400">
-          <input type="checkbox" checked={dbTamper} onChange={(e) => setDbTamper(e.target.checked)} />
-          Simulate server-side tampering: shift the timestamps of record seq
-          <input
-            type="number"
-            min={0}
-            value={dbTamperSeq}
-            onChange={(e) => setDbTamperSeq(Number(e.target.value))}
-            className="w-16 bg-slate-900 border border-slate-700 rounded px-2 py-1 text-slate-100"
-          />
-          by −60 s (in memory only)
-        </label>
-      </Card>
-
-      <div className="flex items-center gap-3">
-        <Button tone="primary" onClick={run} disabled={!files.length || !!progress}>
-          {progress ? "Verifying…" : "3 · Verify integrity"}
-        </Button>
-        {progress && (
-          <div className="flex-1">
-            <div className="w-full bg-slate-800 rounded-full h-2">
-              <div className="bg-indigo-500 h-2 rounded-full transition-all" style={{ width: `${(progress.done / progress.total) * 100}%` }} />
-            </div>
-            <p className="text-[11px] text-slate-500 mt-1">{progress.label}</p>
+        <div className="verification-controls">
+          <span className="text-xs text-slate-500">{mode === "video" ? `${files.length} clips selected` : "One SHA-256 per line · optional filename"}</span>
+          <div className="flex gap-2">
+            <Button onClick={() => { if (mode === "video") { setFiles([]); setReport(null); } else { setHashText(""); setManifestName(""); setManifestReport(null); } setErr(null); }} disabled={working}>Reset input</Button>
+            <Button tone="primary" onClick={run} disabled={working || (mode === "video" ? !files.length : !hashText.trim())}>{working ? "Reviewing…" : mode === "video" ? "Verify video" : "Check hash list"}</Button>
           </div>
-        )}
-      </div>
-      {err && <p className="text-sm text-red-400">⚠ {err}</p>}
-
-      {report && (
+        </div>
+        {progress && <p className="text-xs text-slate-500 mt-4" role="status">{progress}</p>}
+        {err && <p className="text-sm text-red-400 mt-4" role="alert">{err}</p>}
+      </Card>
+      {player && mode === "video" && <Card title="Clip preview"><video src={player.url} controls autoPlay className="w-full max-w-2xl rounded-2xl bg-black" /><p className="text-xs text-slate-500 mt-3">{player.name}</p></Card>}
+      {mode === "video" && report && (
         <>
-          {verdictBox}
-          <Card title="Per-file results">
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead className="text-slate-500 text-left">
-                  <tr>
-                    <th className="p-2">Status</th>
-                    <th className="p-2">File</th>
-                    <th className="p-2">Identified as</th>
-                    <th className="p-2">SHA-256 (actual / registered)</th>
-                    <th className="p-2">Findings</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-800 align-top">
-                  {report.files.map((v, i) => (
-                    <tr key={i} className={v.status === "AUTHENTIC" && !v.problems.length ? "" : v.status === "DUPLICATE" ? "bg-amber-500/5" : "bg-red-500/10"}>
-                      <td className="p-2"><Badge tone={statusTone[v.status]}>{v.status}</Badge></td>
-                      <td className="p-2 font-mono break-all max-w-[14rem]">
-                        <button className="hover:text-indigo-300 text-left" onClick={() => play(v.file)}>▶ {v.file.name}</button>
-                      </td>
-                      <td className="p-2 font-mono text-slate-400 whitespace-nowrap">
-                        {v.record ? (
-                          <>
-                            {v.record.session_id.slice(0, 8)} #{v.record.seq}
-                            <br />
-                            {formatClock(Number(v.record.started_at))}–{formatClock(Number(v.record.ended_at))}
-                            {v.anchorDelayMs !== null && (
-                              <>
-                                <br />anchored +{formatDuration(Math.max(0, v.anchorDelayMs))}
-                              </>
-                            )}
-                          </>
-                        ) : (
-                          "—"
-                        )}
-                      </td>
-                      <td className="p-2 font-mono break-all max-w-[18rem]">
-                        <span className={v.record && v.record.segment_hash !== v.actualHash ? "text-red-400" : "text-emerald-400"}>{v.actualHash}</span>
-                        {v.record && v.record.segment_hash !== v.actualHash && (
-                          <>
-                            <br />
-                            <span className="text-slate-500">{v.record.segment_hash}</span>
-                          </>
-                        )}
-                      </td>
-                      <td className="p-2 text-[11px] max-w-[18rem]">
-                        {v.problems.map((p, j) => (
-                          <p key={j} className="text-red-300">✖ {p}</p>
-                        ))}
-                        {v.warnings.map((p, j) => (
-                          <p key={j} className="text-amber-300">⚠ {p}</p>
-                        ))}
-                        {!v.problems.length && !v.warnings.length && <p className="text-emerald-300">✔ hash, size, signature and chain link valid</p>}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+          <Card title={report.verdict === "AUTHENTIC" ? "Original verified" : report.verdict === "INCOMPLETE" ? "Timeline incomplete" : "Changes detected"}
+            right={<Button small onClick={saveReport}>Save review report</Button>}>
+            <ul className="text-xs text-slate-400 space-y-2">{report.summary.map((line, i) => <li key={i}>{line}</li>)}</ul>
           </Card>
-          {report.sessions.map((s) => (
-            <SessionAuditCard key={s.sessionId} audit={s} />
+          {[...new Set(report.files.map((entry) => entry.record?.session_id ?? "unidentified"))].map((session) => (
+            <Card key={session} title={session === "unidentified" ? "Unmatched footage" : `Video review · ${session.slice(0, 8)}`}>
+              <div className="overflow-x-auto"><table><thead><tr><th>Clip</th><th>Finding</th><th>SHA-256</th><th>Details</th></tr></thead>
+                <tbody>{report.files.filter((entry) => (entry.record?.session_id ?? "unidentified") === session).map((entry) => (
+                  <tr key={entry.file.id}><td className="break-all">{entry.file.name}</td><td><Badge tone={statusTone[entry.status]}>{entry.status}</Badge></td><td className="font-mono">{short(entry.actualHash, 20)}</td><td>{[...entry.problems, ...entry.warnings].join(" · ") || "Hash, size, signature, and chain validated."}</td></tr>
+                ))}</tbody></table></div>
+            </Card>
           ))}
+          {report.sessions.map((session) => <SessionAuditCard key={session.sessionId} audit={session} />)}
+        </>
+      )}
+      {mode === "hashes" && manifestReport && (
+        <>
+          <Card title="Hash registration results" subtitle="This review checks registered fingerprints and their signed records; it does not verify video content."
+            right={<Button small onClick={saveReport}>Save review report</Button>}>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
+              <Stat label="Hashes supplied" value={manifestReport.entries.length} />
+              <Stat label="Registered & valid" value={manifestReport.entries.filter((entry) => entry.status === "REGISTERED").length} tone="green" />
+              <Stat label="Not found / invalid" value={manifestReport.entries.filter((entry) => entry.status === "NOT_FOUND" || entry.status === "INVALID_RECORD").length} tone="red" />
+              <Stat label="Repeated" value={manifestReport.entries.filter((entry) => entry.status === "DUPLICATE").length} tone="amber" />
+            </div>
+            <div className="overflow-x-auto"><table><thead><tr><th>Line</th><th>Fingerprint</th><th>Registration</th><th>Video / clip</th></tr></thead>
+              <tbody>{manifestReport.entries.map((entry) => <tr key={entry.line}><td>{entry.line}</td><td className="font-mono break-all">{entry.hash}</td><td><Badge tone={entry.status === "REGISTERED" ? "green" : entry.status === "DUPLICATE" ? "amber" : "red"}>{entry.status === "REGISTERED" ? "Registered" : entry.status === "NOT_FOUND" ? "Not found" : entry.status === "DUPLICATE" ? "Repeated" : "Record invalid"}</Badge></td><td>{entry.sessionId ? `${entry.sessionId.slice(0, 8)} / #${entry.seq}` : "—"}</td></tr>)}</tbody>
+            </table></div>
+          </Card>
+          {manifestReport.sessions.map((session) => <SessionAuditCard key={session.sessionId} audit={session} />)}
         </>
       )}
     </div>
   );
 }
-
-const sortFiles = (f: EvidenceFile[]) => [...f].sort((a, b) => a.name.localeCompare(b.name));
 
 function SessionAuditCard({ audit }: { audit: SessionAudit }) {
   const sigOk = audit.records.filter((r) => r.signatureOk).length;
@@ -695,7 +449,7 @@ function SessionAuditCard({ audit }: { audit: SessionAudit }) {
   const clean = !audit.problems.length && !audit.records.some((r) => r.problems.length);
   return (
     <Card
-      title={<>Server chain audit · session <span className="font-mono">{audit.sessionId.slice(0, 8)}</span></>}
+      title={<>Chain inspection · <span className="font-mono">{audit.sessionId.slice(0, 8)}</span></>}
       subtitle={
         <>
           device <span className="font-mono">{audit.deviceId?.slice(0, 8) ?? "?"}</span> ({audit.deviceLabel ?? "unknown"}) · public key{" "}

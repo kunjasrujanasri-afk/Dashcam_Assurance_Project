@@ -9,6 +9,7 @@ import { buildSignedRecord, exportPublicJwk, generateDeviceKeyPair, genesisHash,
 import type { DeviceRow, SegmentRow } from "../src/lib/supabaseClient";
 import { flipOneBit, overwriteBlock, swapNames, tamperServerRecord, truncate } from "../src/lib/tamperLab";
 import { EvidenceFile, Repository, verifyEvidence } from "../src/lib/verifier";
+import { parseHashManifest, verifyHashManifest } from "../src/lib/hashManifest";
 
 let failures = 0;
 function expect(name: string, cond: boolean, detail = "") {
@@ -94,6 +95,36 @@ async function main() {
 
   r = await verifyEvidence([files[0], files[0]], repo());
   expect("duplicate detected", r.files[1].status === "DUPLICATE");
+
+
+  const upper = rows[0].segment_hash.toUpperCase();
+  const parsed = parseHashManifest("\uFEFF" + upper + "\r\n\r\n" + rows[1].segment_hash + "  *clip.webm\n");
+  expect("TXT parser handles BOM, CRLF, case and optional filenames", parsed.length === 2 && parsed[0].hash === rows[0].segment_hash && parsed[1].line === 3);
+  const rejects = (text: string, expected: string) => {
+    try { parseHashManifest(text); return false; } catch (e) { return e instanceof Error && e.message.includes(expected); }
+  };
+  expect("empty TXT rejected", rejects(" \n\t", "at least one"));
+  expect("invalid hash reports original line", rejects(rows[0].segment_hash + "\nnot-a-hash", "Line 2"));
+  expect("oversized TXT rejected", rejects(Array(2001).fill(rows[0].segment_hash).join("\n"), "2,000"));
+
+  const manifest = await verifyHashManifest([rows[0].segment_hash, "0".repeat(64), rows[0].segment_hash, rows[1].segment_hash].join("\n"), repo());
+  expect("TXT registration, missing hashes and duplicates distinguished", manifest.entries.map((x) => x.status).join() === "REGISTERED,NOT_FOUND,DUPLICATE,REGISTERED");
+  expect("TXT matches grouped under one audited video session", manifest.sessions.length === 1 && manifest.entries[0].sessionId === sessionId && manifest.entries[3].seq === 1);
+  expect("TXT result never claims to verify video bytes", manifest.videoContentChecked === false);
+
+  const corrupted = rows.map((row) => row.seq === 0 ? { ...row, ended_at: row.ended_at + 1 } : row);
+  const invalidManifest = await verifyHashManifest(rows[0].segment_hash, repo(corrupted));
+  expect("TXT rejects tampered signed cloud records", invalidManifest.entries[0].status === "INVALID_RECORD");
+
+  const batches: number[] = [];
+  const emptyRepo: Repository = {
+    findByHashes: async (hashes) => { batches.push(hashes.length); return []; },
+    getSession: async () => [],
+    getDevice: async () => null,
+  };
+  const manyHashes = Array.from({ length: 205 }, (_, i) => i.toString(16).padStart(64, "0")).join("\n");
+  const batched = await verifyHashManifest(manyHashes, emptyRepo);
+  expect("TXT lookups use bounded batches", batches.join() === "100,100,5" && batched.entries.length === 205);
 
   console.log(failures ? `\n${failures} test(s) FAILED` : "\nAll tests passed");
   process.exit(failures ? 1 : 0);
