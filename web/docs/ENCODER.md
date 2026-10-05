@@ -23,7 +23,7 @@ fingerprints on the server within seconds, while keeping the video itself on the
  └────────────────────────────────────┬──────────────────────────────────────────┘
                                       │ HTTPS (PostgREST)          on incident:
                                       ▼                            clip upload
-             Supabase: devices · dashcam_video_segments (insert-only) · Storage "evidence"
+             Supabase: devices · video_segments (insert-only) · Storage "evidence"
 ```
 
 | Module | Role |
@@ -77,7 +77,7 @@ All hashing uses the browser's native **Web Crypto API** (`crypto.subtle`), no l
 
 ### 2.4 Dynamic transmission of hashes to the storage server
 As soon as a segment is closed (every 5 s), its signed record is written to the **outbox** and the
-transmitter sends it to `public.dashcam_video_segments` (Supabase PostgREST over HTTPS). The server stamps its own
+transmitter sends it to `public.video_segments` (Supabase PostgREST over HTTPS). The server stamps its own
 `created_at` (trigger — the phone cannot back-date) and rows are insert-only. The Decoder receives
 the new rows live through Supabase Realtime (WebSocket).
 

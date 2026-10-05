@@ -1,9 +1,7 @@
-> Rebuilt from the supplied Encoder, Decoder, Evaluation and Fraud Demo reference app.
-> Cloud capture and verification require a signed-in Supabase account. Evaluation is a local synthetic simulation, not a measured production benchmark.
+> Reference implementation: [hoangtrietdev/video-fingerprint-app](https://github.com/hoangtrietdev/video-fingerprint-app) at `2320d470b2bedf5836de35c98d1c6cf6bfbf39fb`.
 >
-> Before deploying, apply `../supabase/migrations/20261005020000_reference_dashcam_app.sql` in the existing Supabase project. It creates isolated `dashcam_devices`, `dashcam_video_segments`, and a private `dashcam-evidence` bucket, with account ownership enforced by RLS. Existing evidence tables and the original browser vault remain intact; old queued segments are not converted to the new protocol.
->
-> The transmitter sends fingerprints in batches without per-segment Auth user requests, uses exponential backoff for outages and HTTP 429, and retains unacknowledged segments locally. Incident clips are uploaded explicitly from the Encoder.
+> Use a **separate Supabase project** and apply `web/supabase/schema.sql` there. The reference uses anonymous access and overlaps with the earlier secure tables and bucket. See [reference analysis](docs/REFERENCE_ANALYSIS.md) before setup. Existing cloud and browser data have not been migrated.
+
 # Dashcam Integrity System — Encoder & Decoder
 
 A smartphone used as a **dashcam** records the road, fingerprints every few seconds of video and
@@ -40,7 +38,7 @@ camera → frames → canvas overlay → 5 s segments
   chain_hash   = SHA-256(record ‖ prev_chain_hash)  ── HTTPS ──►  video_segments   ◄── Realtime / queries
   signature    = ECDSA-P256(device key, chain)      (outbox,      insert-only,
 video kept on phone (loop recording, retention)      retry)       server time
-incident → clip uploaded ───────────────────────────────────────► Storage "dashcam-evidence" ──► retrieve + verify:
+incident → clip uploaded ───────────────────────────────────────► Storage "evidence" ──► retrieve + verify:
                                                                                  hash · signature · chain · gaps
 ```
 
@@ -53,7 +51,7 @@ incident → clip uploaded ─────────────────�
 | Hash generation | SHA-256 + hash chain + ECDSA — `src/lib/integrity.ts` |
 | Dynamic transmission | outbox + transmitter — `src/lib/transmitter.ts`, Realtime on Decoder |
 | Network interruptions | persistent outbox, back-off, idempotent inserts, simulate button |
-| Deletion of expired data | loop recording `src/lib/retention.ts`; server purge `dashcam_purge_expired_segments()` |
+| Deletion of expired data | loop recording `src/lib/retention.ts`; server purge `purge_expired_segments()` |
 | Integrity verification + detection | `src/lib/verifier.ts`, Decoder "Verify evidence" + tamper lab |
 | Perceptual hash metrics (aHash/dHash/pHash/wHash) | `src/lib/fingerprintMetrics.ts` |
 | Fuzzy hashing (ssdeep, TLSH) | `src/lib/fingerprintMetrics.ts` |
@@ -88,4 +86,4 @@ docs/EVALUATION.md         comprehensive evaluation report
 ## Open-source components
 
 Next.js, React, TypeScript, Tailwind CSS, Supabase (`@supabase/supabase-js`), tsx (tests).
-Cryptography uses only the browser-native Web Crypto API. All application logic is original.
+Cryptography uses only the browser-native Web Crypto API. Application logic is adapted from the reference repository linked above.

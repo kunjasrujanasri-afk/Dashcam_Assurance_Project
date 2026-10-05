@@ -187,7 +187,7 @@ export class HashTransmitter {
   private async sendBatch(batch: OutboxEntry[]): Promise<number | "transient"> {
     const rows = batch.map((e) => e.record);
     const { error, status } = await supabase
-      .from("dashcam_video_segments")
+      .from("video_segments")
       .upsert(rows, { onConflict: "session_id,seq", ignoreDuplicates: true });
 
     if (!error) {

@@ -130,7 +130,7 @@ export default function FraudDemoPage() {
           {!supabaseConfigured && <ConfigWarning />}
 
           {/* Scenario picker */}
-          <div className="scenario-tabs flex gap-2 border-b border-slate-800 pb-2 overflow-x-auto">
+          <div className="flex gap-2 border-b border-slate-800 pb-2 overflow-x-auto">
             <button
               onClick={() => setScenario("overview")}
               className={`px-3.5 py-2 rounded-lg text-sm font-semibold whitespace-nowrap ${
@@ -298,7 +298,7 @@ function ScenarioDemo({ config }: { config: ScenarioConfig }) {
     setError(null);
     try {
       const { data, error: e } = await supabase
-        .from("dashcam_video_segments")
+        .from("video_segments")
         .select("*")
         .order("created_at", { ascending: false })
         .limit(500);

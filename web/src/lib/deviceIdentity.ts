@@ -4,7 +4,7 @@
  * Each phone owns a random device id and an ECDSA P-256 key pair created on
  * first launch. The private key is generated as NON-extractable and kept in
  * IndexedDB: JavaScript can use it to sign but can never read its bytes.
- * The public key is registered once in public.dashcam_devices so that the insurer
+ * The public key is registered once in public.devices so that the insurer
  * can verify every segment signature.
  */
 
@@ -50,7 +50,7 @@ export async function loadOrCreateIdentity(): Promise<DeviceIdentity> {
 export async function registerDevice(identity: DeviceIdentity): Promise<"ok" | "retry" | string> {
   if (identity.registered) return "ok";
   const { publicJwk } = identity;
-  const { error, status } = await supabase.from("dashcam_devices").upsert(
+  const { error, status } = await supabase.from("devices").upsert(
     {
       id: identity.deviceId,
       label: identity.label,

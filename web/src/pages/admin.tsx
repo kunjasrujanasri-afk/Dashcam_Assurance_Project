@@ -52,7 +52,7 @@ export default function DecoderPage() {
         <TopNav icon="🛡️" kicker="Insurer · Decoder" title="Evidence Integrity Console" href="/" hrefLabel="Encoder" right={<Link href="/demo" className="text-xs text-slate-400 hover:text-white whitespace-nowrap">Fraud Demo →</Link>} />
         <main className="max-w-6xl mx-auto px-4 py-5 space-y-5">
           {!supabaseConfigured && <ConfigWarning />}
-          <div className="scenario-tabs flex gap-2 border-b border-slate-800 pb-2 overflow-x-auto">
+          <div className="flex gap-2 border-b border-slate-800 pb-2 overflow-x-auto">
             {(
               [
                 ["live", "Live monitor"],
@@ -103,7 +103,7 @@ function LiveMonitor() {
     if (!keys.current.has(deviceId)) {
       keys.current.set(
         deviceId,
-        Promise.resolve(supabase.from("dashcam_devices").select("*").eq("id", deviceId).maybeSingle())
+        Promise.resolve(supabase.from("devices").select("*").eq("id", deviceId).maybeSingle())
           .then(({ data }) => (data ? importPublicJwk((data as DeviceRow).public_key) : null))
           .catch(() => null)
       );
@@ -129,7 +129,7 @@ function LiveMonitor() {
   const load = useCallback(async () => {
     setLoadErr(null);
     const { data, error } = await supabase
-      .from("dashcam_video_segments")
+      .from("video_segments")
       .select("*")
       .order("created_at", { ascending: false })
       .limit(300);
@@ -150,7 +150,7 @@ function LiveMonitor() {
     void load();
     const ch = supabase
       .channel("segments-live")
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "dashcam_video_segments" }, async (p) => {
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "video_segments" }, async (p) => {
         const r = p.new as SegmentRow;
         const c = await checkRow(r);
         setRows((prev) => (prev.some((x) => x.id === r.id) ? prev : [{ ...r, check: c.check, checkNote: c.note }, ...prev].slice(0, 500)));

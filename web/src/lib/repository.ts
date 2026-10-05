@@ -9,7 +9,7 @@ import type { EvidenceFile, Repository } from "./verifier";
 export const supabaseRepository: Repository = {
   async findByHashes(hashes) {
     if (!hashes.length) return [];
-    const { data, error } = await supabase.from("dashcam_video_segments").select("*").in("segment_hash", hashes);
+    const { data, error } = await supabase.from("video_segments").select("*").in("segment_hash", hashes);
     if (error) throw new Error(`Server query failed: ${error.message}`);
     return (data ?? []) as SegmentRow[];
   },
@@ -17,7 +17,7 @@ export const supabaseRepository: Repository = {
     const out: SegmentRow[] = [];
     for (let from = 0; ; from += 1000) {
       const { data, error } = await supabase
-        .from("dashcam_video_segments")
+        .from("video_segments")
         .select("*")
         .eq("session_id", sessionId)
         .order("seq", { ascending: true })
@@ -29,7 +29,7 @@ export const supabaseRepository: Repository = {
     return out;
   },
   async getDevice(deviceId) {
-    const { data, error } = await supabase.from("dashcam_devices").select("*").eq("id", deviceId).maybeSingle();
+    const { data, error } = await supabase.from("devices").select("*").eq("id", deviceId).maybeSingle();
     if (error) throw new Error(`Server query failed: ${error.message}`);
     return (data as DeviceRow) ?? null;
   },
@@ -84,7 +84,7 @@ export async function uploadEvidence(sessionId: string, fileName: string, blob: 
 }
 
 export async function runServerPurge(): Promise<number> {
-  const { data, error } = await supabase.rpc("dashcam_purge_expired_segments");
+  const { data, error } = await supabase.rpc("purge_expired_segments");
   if (error) throw new Error(error.message);
   return Number(data ?? 0);
 }

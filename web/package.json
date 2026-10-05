@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "selftest": "tsx scripts/selftest.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "dev:https": "next dev --experimental-https -H 0.0.0.0"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.117.2",

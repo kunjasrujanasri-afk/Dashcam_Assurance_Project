@@ -13,7 +13,7 @@
 
 import type { SegmentRecord } from "./integrity";
 
-let DB_NAME = "dashcam-encoder";
+const DB_NAME = "dashcam-encoder";
 const DB_VERSION = 1;
 
 export interface LocalSegment {
@@ -38,14 +38,6 @@ export const segmentKey = (sessionId: string, seq: number) =>
   `${sessionId}:${String(seq).padStart(6, "0")}`;
 
 let dbPromise: Promise<IDBDatabase> | null = null;
-
-export function setLocalAccount(userId: string) {
-  const next = `dashcam-encoder:${userId}`;
-  if (DB_NAME === next) return;
-  if (dbPromise) void dbPromise.then(db => db.close());
-  dbPromise = null;
-  DB_NAME = next;
-}
 
 function openDb(): Promise<IDBDatabase> {
   if (dbPromise) return dbPromise;

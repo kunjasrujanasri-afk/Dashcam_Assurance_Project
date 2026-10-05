@@ -25,12 +25,12 @@ export async function applyRetention(retentionMs: number, now = Date.now()): Pro
   const kept: LocalSegment[] = [];
 
   for (const s of all) {
-    if (s.sent && !s.locked && s.record.ended_at < now - retentionMs) deleted.push(s);
+    if (!s.locked && s.record.ended_at < now - retentionMs) deleted.push(s);
     else kept.push(s);
   }
 
   // Storage guard: never keep more than MAX_LOCAL_SEGMENTS unlocked segments.
-  const unlocked = kept.filter((s) => s.sent && !s.locked);
+  const unlocked = kept.filter((s) => !s.locked);
   const overflow = kept.length - MAX_LOCAL_SEGMENTS;
   if (overflow > 0) {
     const victims = new Set(unlocked.slice(0, overflow).map((s) => s.key));

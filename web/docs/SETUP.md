@@ -1,3 +1,5 @@
+> For this repository, run commands from `web/`. Use a separate Supabase project and apply `web/supabase/schema.sql`; do not apply the older root migrations or reuse the existing secure evidence bucket. Copy `web/.env.example` to `web/.env.local` and supply the new project URL and public publishable/anon key.
+
 # Development environment — installation, configuration, run
 
 Both applications (Encoder and Decoder) live in the same Next.js project and share
@@ -30,12 +32,14 @@ Main dependencies (see `package.json`): Next.js 16, React 19, TypeScript 5, Tail
 
 1. On https://supabase.com create a new project (any region, keep the database password).
 2. Open **SQL Editor → New query**, paste the whole content of `supabase/schema.sql`, click **Run**.
-   It creates the `dashcam_devices` and `dashcam_video_segments` tables, the immutability triggers,
+   It creates the `devices` and `video_segments` tables, the immutability triggers,
    the row-level-security policies, the retention purge function, the private
-   storage bucket `dashcam-evidence` and the Realtime publication. The script is idempotent
+   storage bucket `evidence` and the Realtime publication. The script is idempotent
    (safe to run again).
-3. Enable email/password authentication in Supabase Auth. Cloud pages require sign-in and scope records to the signed-in account. Use the Decoder retention button to purge your expired records.
-4. Check **Database → Publications → supabase_realtime** contains `dashcam_video_segments`
+3. *(Recommended)* **Database → Extensions → enable `pg_cron`**, then run the script once more:
+   the expired-hash purge is then scheduled every 15 minutes. Without pg_cron the purge
+   can still be triggered from the Decoder ("Run retention purge").
+4. Check **Database → Publications → supabase_realtime** contains `video_segments`
    (the script does it; this is only a check).
 5. Copy **Project Settings → API**: the *Project URL* and the *anon / publishable* key.
 

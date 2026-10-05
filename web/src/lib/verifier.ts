@@ -2,7 +2,7 @@
  * src/lib/verifier.ts — Decoder integrity verification engine
  *
  * Input : a set of evidence files (video segments) + read access to the
- *         server records (dashcam_video_segments, devices).
+ *         server records (video_segments, devices).
  * Output: a per-file verdict, a per-session chain audit and a global verdict.
  *
  * Checks performed

@@ -47,7 +47,7 @@ camera (getUserMedia) -> canvas composition (15 fps, overlay)
 **Verification pipeline:**
 
 ```
-Evidence files -> SHA-256(bytes) -> lookup in dashcam_video_segments
+Evidence files -> SHA-256(bytes) -> lookup in video_segments
   -> verifyChainSignature(device pubkey)
   -> computeChainHash(row) == row.chain_hash
   -> prev_chain_hash == chain_hash[seq-1]
@@ -152,7 +152,7 @@ File: dashcam_xxx_00003.webm
 // Outbox: records survive any failure
 await putOutbox(entry);            // persisted BEFORE any send attempt
 // Send attempt
-const { error } = await supabase.from("dashcam_video_segments").upsert(rows, {
+const { error } = await supabase.from("video_segments").upsert(rows, {
   onConflict: "session_id,seq",    // idempotent
   ignoreDuplicates: true
 });

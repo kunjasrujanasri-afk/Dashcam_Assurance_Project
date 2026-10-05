@@ -44,7 +44,7 @@ export const OUTBOX_BACKOFF_MAX_MS = 30_000;
 export const ANCHOR_DELAY_WARN_MS = 60_000;
 
 /** Supabase Storage bucket where drivers submit incident clips. */
-export const EVIDENCE_BUCKET = "dashcam-evidence";
+export const EVIDENCE_BUCKET = "evidence";
 
 /** Protocol version prefix included in every chain-hash computation. */
 export const PROTOCOL_VERSION = "dashcam-v1";
