@@ -165,6 +165,4 @@ Vercel's root directory is `web`. Set the two public Supabase variables for Prod
 
 ## Reference and project history
 
-The core integrity and Supabase implementation is adapted from [hoangtrietdev/video-fingerprint-app](https://github.com/hoangtrietdev/video-fingerprint-app), pinned at `2320d470b2bedf5836de35c98d1c6cf6bfbf39fb`. The liquid glass/bento presentation is customized for Dashcam Assurance.
-
-See [reference analysis](web/docs/REFERENCE_ANALYSIS.md), [Encoder guide](web/docs/ENCODER.md), [Decoder guide](web/docs/DECODER.md), and [evaluation guide](web/docs/EVALUATION.md) for additional details.
+See [implementation guide](web/docs/IMPLEMENTATION), [recording guide](web/docs/ENCODER.md), [evidence review guide](web/docs/DECODER.md), and [evaluation guide](web/docs/EVALUATION.md) for additional details.

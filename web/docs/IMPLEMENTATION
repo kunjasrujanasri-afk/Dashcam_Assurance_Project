@@ -1,6 +1,4 @@
-# Reference implementation
-
-Source: [hoangtrietdev/video-fingerprint-app](https://github.com/hoangtrietdev/video-fingerprint-app), commit `2320d470b2bedf5836de35c98d1c6cf6bfbf39fb`.
+# implementation
 
 The application uses Next.js Pages Router and Tailwind CSS. `/` is the driver Encoder, `/admin` is the Decoder, `/demo` demonstrates tampering, and `/evaluation` runs synthetic fingerprint comparisons. The presentation is customized for Dashcam Assurance: frosted glass panels, an asymmetric bento capture layout, a vertical sidebar, and a restrained pearl/rose/lavender palette. The explanatory tab and static demo explanation panels were removed at the user's request.
 
