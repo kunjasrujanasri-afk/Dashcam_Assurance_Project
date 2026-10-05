@@ -11,7 +11,6 @@
  */
 
 import Head from "next/head";
-import Link from "next/link";
 import { useCallback, useState } from "react";
 import { Badge, Button, Card, ConfigWarning, Stat, Tone, TopNav } from "@/components/ui";
 import { segmentFileName } from "@/lib/integrity";
@@ -32,15 +31,13 @@ import { downloadBlob, formatBytes, short } from "@/utils/format";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
-type Scenario = "overview" | "trim" | "blur" | "omit" | "offline";
+type Scenario = "trim" | "blur" | "omit" | "offline";
 type DemoPhase = "intro" | "setup" | "tamper" | "verify" | "result";
 
 interface ScenarioConfig {
   key: Scenario;
-  icon: string;
   title: string;
   subtitle: string;
-  description: string;
   fraudMethod: string;
   detection: string;
 }
@@ -48,43 +45,31 @@ interface ScenarioConfig {
 const SCENARIOS: ScenarioConfig[] = [
   {
     key: "trim",
-    icon: "✂️",
-    title: "Video Trimming Fraud",
-    subtitle: "Cut or shorten the video to remove incriminating footage",
-    description:
-      "The fraudster trims or shortens a video segment to remove the portion that shows they were at fault (e.g., running a red light before the collision). They submit the shortened clip hoping the insurer only sees the aftermath.",
+    title: "Timeline cut",
+    subtitle: "Compare shortened clips with the original recording.",
     fraudMethod: "Truncate the video file to 60-80% of its original length, removing the ending (or beginning) that contains incriminating footage.",
     detection: "SHA-256 of the truncated file differs from the hash registered at capture time. The file size also mismatches. The system flags it as MODIFIED immediately.",
   },
   {
     key: "blur",
-    icon: "🔍",
-    title: "Video Blur / Edit Fraud",
-    subtitle: "Blur or edit unfavorable regions in the video",
-    description:
-      "The fraudster uses video editing software to blur license plates, speedometer readings, traffic signals, or other incriminating details. The re-exported file looks similar but its bytes are completely different.",
+    title: "Pixel rewrite",
+    subtitle: "Test detection of changed video bytes.",
     fraudMethod: "Overwrite a block of bytes in the video (simulating the re-encoding that happens when blur/edit effects are applied). Even a 1-bit change is enough.",
     detection: "Any modification — even a single bit flip — produces a completely different SHA-256 hash. The re-encoded video cannot possibly match the original fingerprint anchored on the server.",
   },
   {
     key: "omit",
-    icon: "🗑️",
-    title: "Selective Omission",
-    subtitle: "Submit only favorable segments, hide the rest",
-    description:
-      "Instead of modifying video files, the fraudster submits only the segments that support their version of events and withholds the segments that prove their fault. For example, submitting segments #0-#3 and #6-#8 but hiding #4-#5 which show them texting while driving.",
-    fraudMethod: "Remove segments from the evidence set before submission. The individual files remain untampered, but the timeline has gaps.",
+    title: "Missing moments",
+    subtitle: "Check for gaps in a submitted timeline.",
+    fraudMethod: "Exclude clips from the evidence set before submission. The individual files remain untampered, but the timeline has gaps.",
     detection: "The verification engine checks sequence continuity: every seq between the first and last submitted must be present. Missing segments are flagged, and the verdict becomes INCOMPLETE or TAMPERED.",
   },
   {
     key: "offline",
-    icon: "📡",
-    title: "Offline / Pre-Upload Tampering",
-    subtitle: "Edit the video before the hash reaches the server",
-    description:
-      "The fraudster notices an accident occurred while the dashcam was offline (e.g., no cellular signal, tunnel, remote area). The hashes have not yet been anchored on the server. They attempt to edit the local video files on their phone before the device reconnects and transmits the fingerprints.",
+    title: "Offline alteration",
+    subtitle: "Compare offline edits with registered records.",
     fraudMethod: "Modify the video file while the device is offline, hoping the edited version will be hashed and anchored instead of the original. This simulates editing footage before the system has a chance to register the real fingerprint.",
-    detection: "The system uses a hash chain: each segment links to the previous via prev_chain_hash. Even if the fraudster re-hashes the modified file, the chain hash computation also covers the device signature (ECDSA private key). Without the private key, they cannot forge a valid signature. The Decoder detects an invalid signature or a broken chain link.",
+    detection: "Each record contains the video hash and previous chain hash, signed with the device key. An altered copy differs from the registered hash; altered records fail chain or signature checks. This trial compares changed copies against existing records.",
   },
 ];
 
@@ -99,12 +84,12 @@ const statusTone: Record<FileStatus, Tone> = {
 // ── Main Page ──────────────────────────────────────────────────────────────
 
 export default function FraudDemoPage() {
-  const [scenario, setScenario] = useState<Scenario>("overview");
+  const [scenario, setScenario] = useState<Scenario>("trim");
 
   return (
     <>
       <Head>
-        <title>Fraud Detection Demo — Dashcam Integrity</title>
+        <title>Integrity Trials · Dashcam Assurance</title>
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <meta
           name="description"
@@ -113,88 +98,26 @@ export default function FraudDemoPage() {
       </Head>
 
       <div className="min-h-screen bg-slate-950 text-white">
-        <TopNav
-          icon="🕵️"
-          kicker="TAMPER EXPERIMENTS"
-          title="Integrity playground"
-          href="/admin"
-          hrefLabel="Decoder"
-          right={
-            <Link href="/" className="text-xs text-slate-400 hover:text-white whitespace-nowrap">
-              Encoder →
-            </Link>
-          }
-        />
+        <TopNav kicker="03 / COPY EXPERIMENTS" title="Integrity Trials" />
 
         <main className="max-w-6xl mx-auto px-4 py-5 space-y-5">
           {!supabaseConfigured && <ConfigWarning />}
 
-          {/* Scenario picker */}
-          <div className="flex gap-2 border-b border-slate-800 pb-2 overflow-x-auto">
-            <button
-              onClick={() => setScenario("overview")}
-              className={`px-3.5 py-2 rounded-lg text-sm font-semibold whitespace-nowrap ${
-                scenario === "overview"
-                  ? "bg-indigo-600 text-white"
-                  : "text-slate-400 hover:bg-slate-800 hover:text-white"
-              }`}
-            >
-              📋 Overview
-            </button>
-            {SCENARIOS.map((s) => (
-              <button
-                key={s.key}
-                onClick={() => setScenario(s.key)}
-                className={`px-3.5 py-2 rounded-lg text-sm font-semibold whitespace-nowrap ${
-                  scenario === s.key
-                    ? "bg-indigo-600 text-white"
-                    : "text-slate-400 hover:bg-slate-800 hover:text-white"
-                }`}
-              >
-                {s.icon} {s.title}
-              </button>
-            ))}
+          <div className="experiment-layout">
+            <aside className="experiment-index glass-card">
+              <label htmlFor="trial-select" className="section-caption">SELECT A TRIAL</label>
+              <select id="trial-select" value={scenario} onChange={(event) => setScenario(event.target.value as Scenario)} className="w-full mt-4">
+                {SCENARIOS.map((trial) => <option key={trial.key} value={trial.key}>{trial.title}</option>)}
+              </select>
+              <p className="index-note">Changes apply to copies only.</p>
+            </aside>
+            <div className="experiment-content">
+              <ScenarioDemo key={scenario} config={SCENARIOS.find((s) => s.key === scenario)!} />
+            </div>
           </div>
-
-          {scenario === "overview" ? (
-            <Overview onSelect={setScenario} />
-          ) : (
-            <ScenarioDemo key={scenario} config={SCENARIOS.find((s) => s.key === scenario)!} />
-          )}
         </main>
       </div>
     </>
-  );
-}
-
-// ════════════════════════════════════════════════════════════════════════════
-// Overview
-// ════════════════════════════════════════════════════════════════════════════
-
-function Overview({ onSelect }: { onSelect: (s: Scenario) => void }) {
-  return (
-    <div className="space-y-6">
-      <p className="text-sm text-slate-400">Choose a scenario to compare original evidence with a modified copy.</p>
-      <div className="grid md:grid-cols-3 gap-5">
-        {SCENARIOS.map((s) => (
-          <button
-            key={s.key}
-            onClick={() => onSelect(s.key)}
-            className="glass-card scenario-tile group text-left p-6 hover:border-indigo-500/50 hover:bg-indigo-500/5 transition-all"
-          >
-            <span className="text-3xl">{s.icon}</span>
-            <h3 className="text-base font-semibold text-white mt-3 group-hover:text-indigo-300 transition-colors">
-              {s.title}
-            </h3>
-            <p className="text-xs text-amber-300 mt-1">{s.subtitle}</p>
-            <p className="text-sm text-slate-400 mt-2 leading-relaxed">{s.description}</p>
-            <span className="inline-flex items-center gap-1 text-xs text-indigo-400 mt-3 group-hover:text-indigo-300">
-              Try this demo →
-            </span>
-          </button>
-        ))}
-      </div>
-    </div>
   );
 }
 
@@ -255,7 +178,7 @@ function ScenarioDemo({ config }: { config: ScenarioConfig }) {
     }
   }, []);
 
-  // ── Step 2: Load evidence files (IndexedDB → cloud → synthetic) ──
+  // ── Step 2: Load evidence files (IndexedDB  cloud  synthetic) ──
   const loadSessionEvidence = useCallback(async (sessionId: string) => {
     setSelectedSession(sessionId);
     setLoading(true);
@@ -430,7 +353,7 @@ function ScenarioDemo({ config }: { config: ScenarioConfig }) {
     }
   }, [config.key, origFiles, trimPercent, blurBlockSize, omitIndices]);
 
-  // ── Step 4: Run verification on tampered evidence ──
+  // ── Step 4: Compare with registered evidence ──
   const runVerify = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -475,24 +398,22 @@ function ScenarioDemo({ config }: { config: ScenarioConfig }) {
         }`}
       >
         <div className="flex items-start gap-4">
-          <span className="text-4xl">{config.icon}</span>
           <div>
             <h2 className="text-xl font-bold text-white">{config.title}</h2>
             <p className="text-sm text-amber-300 mt-0.5">{config.subtitle}</p>
-            <p className="text-sm text-slate-300 mt-2 leading-relaxed max-w-3xl">{config.description}</p>
           </div>
         </div>
       </div>
 
       {/* Progress steps */}
-      <div className="flex items-center gap-0 overflow-x-auto">
+      <div className="trial-progress">
         {(
           [
-            ["intro", "1. Understand"],
-            ["setup", "2. Select session"],
-            ["tamper", "3. Apply fraud"],
-            ["verify", "4. Verify"],
-            ["result", "5. Result"],
+            ["intro", "Brief"],
+            ["setup", "Choose footage"],
+            ["tamper", "Alter copy"],
+            ["verify", "Compare"],
+            ["result", "Findings"],
           ] as [DemoPhase, string][]
         ).map(([p, label], i) => {
           const phases: DemoPhase[] = ["intro", "setup", "tamper", "verify", "result"];
@@ -510,7 +431,7 @@ function ScenarioDemo({ config }: { config: ScenarioConfig }) {
                     : "bg-slate-800 text-slate-500"
                 }`}
               >
-                {active && step < current ? "✓" : ""} {label}
+                {label}
               </div>
               {i < 4 && (
                 <div className={`w-6 h-0.5 ${active && step < current ? "bg-emerald-600/50" : "bg-slate-700"}`} />
@@ -521,46 +442,29 @@ function ScenarioDemo({ config }: { config: ScenarioConfig }) {
       </div>
 
       {error && (
-        <div className="p-4 rounded-xl border border-red-500/40 bg-red-500/10 text-sm text-red-300">⚠ {error}</div>
+        <div className="p-4 rounded-xl border border-red-500/40 bg-red-500/10 text-sm text-red-300"> {error}</div>
       )}
 
       {/* Phase: Intro */}
       {phase === "intro" && (
-        <Card title="Fraud technique & detection method">
-          <div className="grid md:grid-cols-2 gap-6">
-            <div>
-              <h4 className="text-sm font-semibold text-red-300 flex items-center gap-2 mb-2">
-                <span>🦹</span> What the fraudster does
-              </h4>
-              <p className="text-sm text-slate-300 leading-relaxed">{config.fraudMethod}</p>
-            </div>
-            <div>
-              <h4 className="text-sm font-semibold text-emerald-300 flex items-center gap-2 mb-2">
-                <span>🛡️</span> How the system detects it
-              </h4>
-              <p className="text-sm text-slate-300 leading-relaxed">{config.detection}</p>
-            </div>
-          </div>
-          <div className="mt-5 pt-4 border-t border-slate-700/50">
-            <Button tone="primary" onClick={loadSessions} disabled={loading}>
-              {loading ? "Loading sessions…" : "→ Start demo: Load recorded sessions"}
-            </Button>
-          </div>
+        <Card title="Begin a trial" subtitle="Choose a recorded journey, alter a copy, then compare the evidence.">
+          <Button tone="primary" onClick={loadSessions} disabled={loading}>
+            {loading ? "Loading journeys…" : "Choose a journey"}
+          </Button>
         </Card>
       )}
 
       {/* Phase: Setup — pick a session */}
       {phase === "setup" && (
         <Card
-          title="Select a recorded session"
-          subtitle="Pick a session from the Encoder. Its segments will become the original evidence."
+          title="Choose your source"
+          subtitle="Select a recording to use as the source."
         >
           {sessions.length === 0 ? (
             <div className="text-center py-8">
               <p className="text-slate-400 text-sm">No recording sessions found.</p>
               <p className="text-slate-500 text-xs mt-1">
-                Go to the <Link href="/" className="text-indigo-400 hover:underline">Encoder</Link> page, start the dashcam,
-                record a few segments, and come back here.
+                Record a journey in Drive Studio to begin.
               </p>
             </div>
           ) : (
@@ -597,21 +501,20 @@ function ScenarioDemo({ config }: { config: ScenarioConfig }) {
       {phase === "tamper" && (
         <div className="space-y-5">
           <Card
-            title="Original evidence"
+            title="Source clips"
             subtitle={`${origFiles.length} segment(s) from session ${selectedSession?.slice(0, 8)}`}
           >
             <FileTable files={origFiles} label="Original" onPlay={play} />
           </Card>
 
           <Card
-            title={`Apply fraud: ${config.title}`}
+            title={`Alteration settings · ${config.title}`}
             subtitle="Configure and apply the tampering operation"
           >
             {config.key === "trim" && (
               <div className="space-y-3">
                 <p className="text-sm text-slate-300">
-                  Simulate cutting the video short — keeping only a portion and discarding the rest.
-                  The fraudster hopes the removed portion (showing their fault) goes unnoticed.
+                  Choose how much of each clip to retain.
                 </p>
                 <label className="flex items-center gap-3 text-sm text-slate-400">
                   Keep
@@ -626,7 +529,7 @@ function ScenarioDemo({ config }: { config: ScenarioConfig }) {
                   <span className="font-mono text-orange-400 w-12 text-right">{trimPercent}%</span>
                 </label>
                 <p className="text-xs text-slate-500">
-                  Removing even 5% of the file changes the SHA-256 hash completely.
+                  Shortening changes the file hash.
                 </p>
               </div>
             )}
@@ -634,11 +537,10 @@ function ScenarioDemo({ config }: { config: ScenarioConfig }) {
             {config.key === "blur" && (
               <div className="space-y-3">
                 <p className="text-sm text-slate-300">
-                  Simulate applying a blur or edit effect to a region of the video. When a video editor re-encodes
-                  the file, the bytes change throughout — even in &quot;unedited&quot; regions due to codec compression.
+                  Choose the number of bytes to overwrite in each copy.
                 </p>
                 <label className="flex items-center gap-3 text-sm text-slate-400">
-                  Edited region size
+                  Changed bytes
                   <select
                     value={blurBlockSize}
                     onChange={(e) => setBlurBlockSize(Number(e.target.value))}
@@ -647,12 +549,12 @@ function ScenarioDemo({ config }: { config: ScenarioConfig }) {
                     <option value={1}>1 byte (minimal)</option>
                     <option value={1024}>1 KB</option>
                     <option value={4096}>4 KB</option>
-                    <option value={8192}>8 KB (typical blur region)</option>
+                    <option value={8192}>8 KB</option>
                     <option value={65536}>64 KB (large edit)</option>
                   </select>
                 </label>
                 <p className="text-xs text-slate-500">
-                  Even changing 1 single byte makes the SHA-256 completely different (avalanche effect).
+                  This simulates byte changes; it does not render a blur effect.
                 </p>
               </div>
             )}
@@ -660,8 +562,7 @@ function ScenarioDemo({ config }: { config: ScenarioConfig }) {
             {config.key === "omit" && (
               <div className="space-y-3">
                 <p className="text-sm text-slate-300">
-                  Select which segments to <strong className="text-red-400">remove</strong> from the evidence.
-                  The remaining files are untouched — but the gaps in the sequence reveal the deception.
+                  Select clips to exclude from the review.
                 </p>
                 <div className="flex flex-wrap gap-2">
                   {origFiles.map((f, i) => (
@@ -687,7 +588,7 @@ function ScenarioDemo({ config }: { config: ScenarioConfig }) {
                 </div>
                 {omitIndices.size === 0 && (
                   <p className="text-xs text-amber-400">
-                    Click segments above to mark them for removal, or proceed to auto-select middle segments.
+                    Choose clips, or continue to exclude the middle clips.
                   </p>
                 )}
                 {omitIndices.size > 0 && (
@@ -701,29 +602,18 @@ function ScenarioDemo({ config }: { config: ScenarioConfig }) {
             {config.key === "offline" && (
               <div className="space-y-3">
                 <p className="text-sm text-slate-300">
-                  Simulate editing the video <strong className="text-amber-300">before</strong> the hashes are uploaded to the server.
-                  The fraudster modifies the footage while the device has no network, hoping to submit
-                  the tampered version as if it were the original.
+                  Overwrite 10% of each copy and compare it with the registered source.
                 </p>
-                <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-3">
-                  <p className="text-xs text-amber-300 font-semibold mb-1">⚡ Why this still fails:</p>
-                  <ul className="text-xs text-slate-400 list-disc pl-5 space-y-1">
-                    <li>The hash is computed <strong>at recording time</strong> on the device, not at upload time</li>
-                    <li>Even offline, the segment hash is already sealed into the hash chain</li>
-                    <li>The chain hash is signed with the device&apos;s ECDSA private key (stored in secure browser storage)</li>
-                    <li>The fraudster would need to re-sign the entire chain — but the private key is non-extractable</li>
-                    <li>When the device reconnects, it transmits the <strong>original</strong> signed hashes, not the tampered ones</li>
-                  </ul>
-                </div>
+
                 <p className="text-xs text-slate-500">
-                  This demo modifies 10% of each file&apos;s bytes (simulating a video edit) and submits the modified files against the original server records.
+                  Cloud records remain unchanged.
                 </p>
               </div>
             )}
 
             <div className="mt-4 pt-3 border-t border-slate-700/50 flex gap-3">
               <Button tone="warn" onClick={applyTamper} disabled={loading}>
-                {config.key === "trim" ? "✂️ Trim videos" : config.key === "blur" ? "🔍 Apply blur effect" : config.key === "offline" ? "📡 Simulate offline edit" : "🗑️ Remove segments"}
+                {config.key === "trim" ? " Shorten copies" : config.key === "blur" ? " Rewrite copies" : config.key === "offline" ? " Create offline alteration" : " Exclude clips"}
               </Button>
               <Button
                 onClick={() => {
@@ -734,7 +624,7 @@ function ScenarioDemo({ config }: { config: ScenarioConfig }) {
                   setOrigReport(null);
                 }}
               >
-                ← Back
+                 Back
               </Button>
             </div>
           </Card>
@@ -742,11 +632,11 @@ function ScenarioDemo({ config }: { config: ScenarioConfig }) {
           {tamperedFiles.length > 0 && (
             <>
               <Card
-                title="Tampered evidence (what the fraudster submits)"
+                title="Altered copies"
                 subtitle={`${tamperedFiles.length} file(s) — modifications highlighted`}
                 right={
                   <Button small onClick={() => { for (const f of tamperedFiles) downloadBlob(f.blob, f.name); }}>
-                    ⬇ Download all tampered
+                     Save altered copies
                   </Button>
                 }
               >
@@ -756,11 +646,11 @@ function ScenarioDemo({ config }: { config: ScenarioConfig }) {
               {/* Side-by-side comparison */}
               <div className="grid md:grid-cols-2 gap-4">
                 <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-4">
-                  <h4 className="text-sm font-semibold text-emerald-300 mb-2">✓ Original evidence</h4>
+                  <h4 className="text-sm font-semibold text-emerald-300 mb-2"> Source clips</h4>
                   <p className="text-xs text-slate-400">{origFiles.length} files, {formatBytes(origFiles.reduce((a, f) => a + f.blob.size, 0))} total</p>
                 </div>
                 <div className="rounded-xl border border-red-500/30 bg-red-500/5 p-4">
-                  <h4 className="text-sm font-semibold text-red-300 mb-2">✖ Tampered evidence</h4>
+                  <h4 className="text-sm font-semibold text-red-300 mb-2"> Tampered evidence</h4>
                   <p className="text-xs text-slate-400">
                     {tamperedFiles.length} files, {formatBytes(tamperedFiles.reduce((a, f) => a + f.blob.size, 0))} total
                     {config.key === "trim" && ` (${Math.round((1 - tamperedFiles.reduce((a, f) => a + f.blob.size, 0) / origFiles.reduce((a, f) => a + f.blob.size, 0)) * 100)}% smaller)`}
@@ -771,7 +661,7 @@ function ScenarioDemo({ config }: { config: ScenarioConfig }) {
 
               <div className="flex items-center gap-3">
                 <Button tone="primary" onClick={runVerify} disabled={loading}>
-                  {loading ? "Verifying…" : "🛡️ Run verification on tampered evidence"}
+                  {loading ? "Verifying…" : " Compare with registered evidence"}
                 </Button>
                 {progress && (
                   <div className="flex-1">
@@ -798,66 +688,23 @@ function ScenarioDemo({ config }: { config: ScenarioConfig }) {
             {origReport && (
               <VerdictBox
                 report={origReport}
-                label="Original evidence (baseline)"
-                icon="✓"
-              />
+                label="Source clips (baseline)"
+                />
             )}
             <VerdictBox
               report={report}
-              label="Tampered evidence (fraud attempt)"
-              icon="✖"
-            />
+              label="Altered copies"
+              />
           </div>
 
-          {/* Detailed explanation */}
-          <Card
-            title="What happened?"
-            subtitle={`Detection analysis for: ${config.title}`}
-          >
-            <div className="space-y-4">
-              <div className="rounded-xl border border-red-500/30 bg-red-500/5 p-4">
-                <h4 className="text-sm font-semibold text-red-300 mb-2">🦹 The fraud attempt</h4>
-                <p className="text-sm text-slate-300">{config.fraudMethod}</p>
-              </div>
-              <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-4">
-                <h4 className="text-sm font-semibold text-emerald-300 mb-2">🛡️ Why it was caught</h4>
-                <p className="text-sm text-slate-300">{config.detection}</p>
-                {config.key === "trim" && (
-                  <ul className="mt-2 space-y-1 text-xs text-slate-400 list-disc pl-5">
-                    <li>The truncated file has fewer bytes → different SHA-256</li>
-                    <li>File size doesn&apos;t match the size recorded at capture</li>
-                    <li>The filename matches a known segment, but the content is different → <strong className="text-red-400">MODIFIED</strong></li>
-                  </ul>
-                )}
-                {config.key === "blur" && (
-                  <ul className="mt-2 space-y-1 text-xs text-slate-400 list-disc pl-5">
-                    <li>Re-encoding with blur changes bytes throughout the file</li>
-                    <li>SHA-256 avalanche effect: even 1 byte change → completely different hash</li>
-                    <li>The edited file cannot match any registered fingerprint → <strong className="text-red-400">MODIFIED</strong></li>
-                  </ul>
-                )}
-                {config.key === "omit" && (
-                  <ul className="mt-2 space-y-1 text-xs text-slate-400 list-disc pl-5">
-                    <li>Individual files may be authentic (untouched)</li>
-                    <li>But the verifier checks sequence numbers: first to last must be contiguous</li>
-                    <li>Missing segments in the range → <strong className="text-amber-400">INCOMPLETE</strong> or <strong className="text-red-400">TAMPERED</strong></li>
-                  </ul>
-                )}
-                {config.key === "offline" && (
-                  <ul className="mt-2 space-y-1 text-xs text-slate-400 list-disc pl-5">
-                    <li>The hash was computed and signed <strong>at recording time</strong>, before any edit could occur</li>
-                    <li>The device transmits the <strong>original</strong> signed fingerprints when it reconnects</li>
-                    <li>The modified file&apos;s SHA-256 does not match the anchored hash → <strong className="text-red-400">MODIFIED</strong></li>
-                    <li>Even if the fraudster somehow re-hashes, they cannot forge the ECDSA device signature</li>
-                    <li>The chain link (prev_chain_hash) would also break, compounding the evidence of tampering</li>
-                  </ul>
-                )}
-              </div>
-            </div>
-          </Card>
+          <details className="glass-card trial-details p-5">
+            <summary>Technical notes</summary>
+            <p className="text-xs text-slate-400 mt-4">{config.fraudMethod}</p>
+            <p className="text-xs text-slate-400 mt-3">{config.detection}</p>
+          </details>
 
           {/* Per-file results */}
-          <Card title="Per-file verification results">
+          <Card title="Clip comparison">
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead className="text-slate-500 text-left">
@@ -902,16 +749,16 @@ function ScenarioDemo({ config }: { config: ScenarioConfig }) {
                       <td className="p-2 text-[11px] max-w-[18rem]">
                         {v.problems.map((p, j) => (
                           <p key={j} className="text-red-300">
-                            ✖ {p}
+                             {p}
                           </p>
                         ))}
                         {v.warnings.map((p, j) => (
                           <p key={j} className="text-amber-300">
-                            ⚠ {p}
+                             {p}
                           </p>
                         ))}
                         {!v.problems.length && !v.warnings.length && (
-                          <p className="text-emerald-300">✔ Authentic</p>
+                          <p className="text-emerald-300"> Authentic</p>
                         )}
                       </td>
                     </tr>
@@ -936,7 +783,7 @@ function ScenarioDemo({ config }: { config: ScenarioConfig }) {
                 setTamperedFiles([]);
               }}
             >
-              ← Modify fraud parameters
+               Adjust this trial
             </Button>
             <Button
               onClick={() => {
@@ -948,7 +795,7 @@ function ScenarioDemo({ config }: { config: ScenarioConfig }) {
                 setSelectedSession(null);
               }}
             >
-              ↺ Start over
+               Reset trial
             </Button>
           </div>
         </div>
@@ -1015,12 +862,8 @@ function FileTable({
                 </td>
               )}
               <td className="p-2 text-right whitespace-nowrap space-x-1">
-                <Button small onClick={() => onPlay(f, `${label}: ${f.name}`)}>
-                  ▶
-                </Button>
-                <Button small onClick={() => downloadBlob(f.blob, f.name)}>
-                  ⬇
-                </Button>
+                <Button small onClick={() => onPlay(f, `${label}: ${f.name}`)}>Play</Button>
+                <Button small onClick={() => downloadBlob(f.blob, f.name)}>Save</Button>
               </td>
             </tr>
           ))}
@@ -1043,7 +886,6 @@ function VerdictBox({
 }: {
   report: VerificationReport;
   label: string;
-  icon: string;
 }) {
   return (
     <div
@@ -1066,10 +908,10 @@ function VerdictBox({
         }`}
       >
         {report.verdict === "AUTHENTIC"
-          ? "✔ AUTHENTIC"
+          ? "Original verified"
           : report.verdict === "INCOMPLETE"
-          ? "◐ INCOMPLETE"
-          : "✖ TAMPERED"}
+          ? "Timeline incomplete"
+          : "Changes detected"}
       </p>
       <p className="text-xs text-slate-300 mt-1">
         {report.verdict === "AUTHENTIC"
@@ -1144,12 +986,12 @@ function SessionAuditCard({ audit }: { audit: SessionAudit }) {
       </div>
       {audit.problems.map((p, i) => (
         <p key={i} className="text-xs text-red-300">
-          ✖ {p}
+           {p}
         </p>
       ))}
       {audit.warnings.map((p, i) => (
         <p key={i} className="text-xs text-amber-300">
-          ⚠ {p}
+           {p}
         </p>
       ))}
       {audit.submittedSeqs.length > 0 && (

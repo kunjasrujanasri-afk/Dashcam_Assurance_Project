@@ -17,9 +17,8 @@
  */
 
 import Head from "next/head";
-import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Badge, Button, Card, Stat, TopNav } from "@/components/ui";
+import { Badge, Button, Card, Stat, SegmentedControl, TopNav } from "@/components/ui";
 import {
   aHash,
   buildFeatureVector,
@@ -410,12 +409,12 @@ function runEvaluations(
 // ── Page component ─────────────────────────────────────────────────────────
 
 const catLabel: Record<ScenarioCategory, string> = {
-  temporal: "1. Temporal",
-  transformation: "2. Transformation",
-  network: "3. Network",
-  authenticity: "4. Authenticity",
-  metrics: "6. Metrics Detail",
-  threshold: "7. Threshold",
+  temporal: "Timeline",
+  transformation: "Visual changes",
+  network: "Connectivity",
+  authenticity: "Provenance",
+  metrics: "Fingerprint detail",
+  threshold: "Sensitivity",
 };
 
 const catColors: Record<ScenarioCategory, string> = {
@@ -461,26 +460,20 @@ export default function EvaluationPage() {
   return (
     <>
       <Head>
-        <title>Evaluation Dashboard — Video Integrity</title>
+        <title>Signal Lab · Dashcam Assurance</title>
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <meta name="description" content="Comprehensive evaluation of video fingerprinting scenarios, transformation robustness, and distance metric thresholds." />
       </Head>
 
       <div className="min-h-screen bg-slate-950 text-white">
-        <TopNav
-          icon="📊"
-          kicker="RESEARCH WORKSPACE"
-          title="Evaluation lab"
-          href="/admin"
-          hrefLabel="Decoder"
-          right={<Link href="/demo" className="text-xs text-slate-400 hover:text-white whitespace-nowrap">Demo →</Link>}
-        />
+        <TopNav kicker="04 / SIMILARITY RESEARCH" title="Signal Lab" />
 
         <main className="max-w-7xl mx-auto px-4 py-6 space-y-6">
 
-          {/* Threshold controls */}
-          <Card title="Metric Thresholds" subtitle="Adjust thresholds then re-run evaluation">
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-4 text-sm">
+          <div className="signal-layout">
+          <aside className="signal-controls">
+          <Card title="Sensitivity settings" subtitle="Adjust the limits, then recalculate.">
+            <div className="signal-fields">
               {[
                 { key: "maxHamming", label: "Max Hamming", min: 1, max: 32, step: 1 },
                 { key: "minSsdeepScore", label: "Min ssdeep", min: 10, max: 100, step: 5 },
@@ -503,44 +496,34 @@ export default function EvaluationPage() {
             </div>
             <div className="mt-4">
               <Button tone="primary" onClick={run} disabled={running}>
-                {running ? "Running…" : "▶ Run Evaluation"}
+                {running ? "Running…" : "Recalculate signals"}
               </Button>
             </div>
           </Card>
 
+          </aside>
+          <div className="signal-results">
           {/* Summary stats */}
           {summary && (
-            <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
+            <div className="signal-summary grid grid-cols-2 sm:grid-cols-3 gap-3">
               {[
-                { label: "Total Cases", value: summary.total, tone: "slate" as const },
-                { label: "Correct", value: summary.correct, tone: "green" as const },
-                { label: "True Matches", value: summary.trueMatch, tone: "sky" as const },
-                { label: "False Matches", value: summary.falseMatch, tone: "red" as const },
-                { label: "Missed Matches", value: summary.missedMatch, tone: "amber" as const },
-                { label: "Correct Detections", value: summary.correctDetect, tone: "green" as const },
+                { label: "Sample cases", value: summary.total, tone: "slate" as const },
+                { label: "Aligned results", value: summary.correct, tone: "green" as const },
+                { label: "Accepted originals", value: summary.trueMatch, tone: "sky" as const },
+                { label: "False accepts", value: summary.falseMatch, tone: "red" as const },
+                { label: "Missed originals", value: summary.missedMatch, tone: "amber" as const },
+                { label: "Detected changes", value: summary.correctDetect, tone: "green" as const },
               ].map(({ label, value, tone }) => (
                 <Stat key={label} label={label} value={value} tone={tone} />
               ))}
             </div>
           )}
 
-          {/* Category tabs */}
-          <div className="flex gap-2 overflow-x-auto pb-1 border-b border-slate-800">
-            {cats.map((cat) => (
-              <button
-                key={cat}
-                id={`tab-${cat}`}
-                onClick={() => setActiveCategory(cat)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${activeCategory === cat ? "bg-indigo-600 text-white" : "text-slate-400 hover:bg-slate-800 hover:text-white"}`}
-              >
-                {cat === "all" ? "All Scenarios" : catLabel[cat]}
-              </button>
-            ))}
-          </div>
-
+          <SegmentedControl<ScenarioCategory | "all"> label="Signal categories" value={activeCategory} onChange={setActiveCategory}
+            items={cats.map((cat) => ({ value: cat, label: cat === "all" ? "All signals" : catLabel[cat] }))} />
           {/* Test case table */}
           {results && (
-            <Card title={activeCategory === "all" ? "All Test Cases" : catLabel[activeCategory]} subtitle={`${visible.length} scenario${visible.length !== 1 ? "s" : ""}`}>
+            <Card title={activeCategory === "all" ? "Signal results" : catLabel[activeCategory]} subtitle={`${visible.length} scenario${visible.length !== 1 ? "s" : ""}`}>
               <div className="overflow-x-auto">
                 <table className="w-full text-xs">
                   <thead>
@@ -589,8 +572,8 @@ export default function EvaluationPage() {
                           <td className="py-2 pr-3 font-mono">{c.matchScore !== undefined ? `${c.matchScore}%` : "—"}</td>
                           <td className="py-2 pr-3">
                             {correct
-                              ? <Badge tone="green">✓ Correct</Badge>
-                              : <Badge tone="red">✗ Wrong</Badge>}
+                              ? <Badge tone="green">Aligned</Badge>
+                              : <Badge tone="red">Mismatch</Badge>}
                           </td>
                           <td className="py-2 pr-3 font-mono text-slate-400">{c.processingMs !== undefined ? `${c.processingMs.toFixed(1)} ms` : "—"}</td>
                         </tr>
@@ -604,7 +587,7 @@ export default function EvaluationPage() {
 
           {/* Section 7: Threshold evaluation */}
           {results && (
-            <Card title="§7 · Threshold Evaluation (pHash Hamming Distance)" subtitle="Precision / Recall / F1 / Accuracy at varying Hamming distance thresholds">
+            <Card title="Sensitivity comparison" subtitle="Precision / Recall / F1 / Accuracy at varying Hamming distance thresholds">
               <div className="overflow-x-auto">
                 <table className="w-full text-xs">
                   <thead>
@@ -638,7 +621,7 @@ export default function EvaluationPage() {
           )}
 
           {/* Methodology note */}
-          <Card title="Evaluation Methodology" subtitle="How synthetic simulations model real-world transformations">
+          <Card title="About these signals" subtitle="How synthetic simulations model real-world transformations">
             <div className="text-sm text-slate-300 space-y-3 leading-relaxed max-w-4xl">
               <p>
                 Because the system operates in-browser without native codec access, frame-level evaluation
@@ -648,7 +631,7 @@ export default function EvaluationPage() {
               </p>
               <p>
                 The <strong className="text-white">SHA-256 segment-hash fingerprints</strong> (used by the
-                Encoder/Decoder) are byte-exact and cryptographically secure — any re-encoding produces a
+                Drive Studio / Evidence Desk) are byte-exact and cryptographically secure — any re-encoding produces a
                 completely different hash, so re-encoded videos are always flagged as MODIFIED at the file level.
                 The perceptual hash layer (aHash, dHash, pHash, wHash) provides a second, fuzzy-matching layer
                 that can assess visual similarity even after allowed transformations.
@@ -664,6 +647,8 @@ export default function EvaluationPage() {
               </ul>
             </div>
           </Card>
+          </div>
+          </div>
         </main>
       </div>
     </>

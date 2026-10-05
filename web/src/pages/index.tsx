@@ -8,8 +8,7 @@
 
 import Head from "next/head";
 import { WorkspaceIcon } from "@/components/app-shell";
-import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Badge, Button, Card, ConfigWarning, Stat, TopNav } from "@/components/ui";
 import {
   DEFAULT_RETENTION_MS,
@@ -254,6 +253,19 @@ export default function EncoderPage() {
 
   // ── Derived ────────────────────────────────────────────────────────────────
   const recording = rec === "recording";
+  const videoGroups = useMemo(() => {
+    const groups = new Map<string, LocalSegment[]>();
+    for (const clip of segments) {
+      const group = groups.get(clip.record.session_id) ?? [];
+      group.push(clip);
+      groups.set(clip.record.session_id, group);
+    }
+    return [...groups.entries()].map(([sessionId, clips]) => ({
+      sessionId, clips: clips.sort((a, b) => a.record.seq - b.record.seq),
+      startedAt: Math.min(...clips.map((c) => c.record.started_at)),
+      endedAt: Math.max(...clips.map((c) => c.record.ended_at)),
+    })).sort((a, b) => b.startedAt - a.startedAt);
+  }, [segments]);
   const localBytes = segments.reduce((a, s) => a + s.blob.size, 0);
   const linkBadge =
     link === "online" ? (
@@ -267,13 +279,13 @@ export default function EncoderPage() {
   return (
     <>
       <Head>
-        <title>Dashcam Encoder</title>
+        <title>Drive Studio · Dashcam Assurance</title>
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-        <meta name="theme-color" content="#f7f2f6" />
+        <meta name="theme-color" content="#e9f0f5" />
       </Head>
 
       <div className="min-h-screen bg-slate-950 text-white">
-        <TopNav icon="🎥" kicker="DRIVER WORKSPACE" title="Capture studio" href="/admin" hrefLabel="Decoder" right={<Link href="/demo" className="text-xs text-slate-400 hover:text-white whitespace-nowrap">Fraud Demo →</Link>} />
+        <TopNav kicker="01 / JOURNEY CAPTURE" title="Drive Studio" />
 
         <main className="max-w-6xl mx-auto px-4 py-5 space-y-5">
           {!supabaseConfigured && <ConfigWarning />}
@@ -283,7 +295,7 @@ export default function EncoderPage() {
             </div>
           )}
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="session-ribbon">
             {recording ? <Badge tone="red" pulse>REC</Badge> : <Badge tone="slate">{rec === "starting" ? "Starting…" : rec === "stopping" ? "Finalising…" : "Standby"}</Badge>}
             {linkBadge}
             {pending > 0 && <Badge tone="amber">{pending} hash(es) in outbox</Badge>}
@@ -295,23 +307,8 @@ export default function EncoderPage() {
             )}
           </div>
 
-          <div className="capture-stats grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
-            <Stat label="Elapsed" value={startedAt ? formatElapsed(now - startedAt) : "—"} tone="indigo" />
-            <Stat label="Segments recorded" value={stats.recorded} tone="green" />
-            <Stat label="Hashes sent" value={stats.sent} tone="sky" />
-            <Stat label="Outbox (pending)" value={pending} tone={pending ? "amber" : "slate"} />
-            <Stat label="Stored on phone" value={segments.length} sub={formatBytes(localBytes)} />
-            <Stat label="Deleted (expired)" value={stats.purged} sub={`after ${retentionMs / 60000} min`} />
-          </div>
-          {storage && storage.quota > 0 && (
-            <p className="capture-storage">
-              Browser storage: {formatBytes(storage.usage)} used of {formatBytes(storage.quota)}
-            </p>
-          )}
-
-          <div className="grid lg:grid-cols-5 gap-5">
-            {/* ── Camera / composition ───────────────────────────────────── */}
-            <Card className="capture-card lg:col-span-3" title="Live capture" subtitle="Your journey, captured and protected. Start recording when you are ready.">
+          <div className="drive-layout">
+            <Card className="capture-stage" title="The view ahead" subtitle="Live canvas · signed video segments">
               <div className="capture-preview relative w-full aspect-video overflow-hidden">
                 <canvas ref={canvasRef} className="w-full h-full object-contain" />
                 {!recording && (
@@ -323,25 +320,27 @@ export default function EncoderPage() {
               {/* Source video element: must be in the DOM for iOS, kept invisible */}
               <video ref={videoRef} playsInline muted className="absolute w-px h-px opacity-0 pointer-events-none" />
 
-              <div className="flex flex-wrap gap-2 mt-4">
+            </Card>
+            <Card className="recording-console" title="Session controls" subtitle="Start a journey. Keep the moments that matter.">
+              <div className="capture-actions">
                 {!recording ? (
                   <Button tone="success" onClick={start} disabled={!identity || rec === "starting" || rec === "stopping"}>
-                    ● Start dashcam
+                    Begin recording
                   </Button>
                 ) : (
-                  <Button tone="danger" onClick={stop}>■ Stop</Button>
+                  <Button tone="danger" onClick={stop}>Finish recording</Button>
                 )}
                 <Button tone="warn" onClick={incident} disabled={!recording} title="Lock the last 30 s and next 30 s of video">
-                  ⚠ Incident — lock clip
+                  Protect incident window
                 </Button>
                 <Button onClick={toggleSim} tone={simOffline ? "warn" : "slate"} title="Cut the uplink to demonstrate offline buffering">
-                  {simOffline ? "↺ Restore network" : "✈ Simulate network loss"}
+                  {simOffline ? "Reconnect uplink" : "Pause uplink"}
                 </Button>
               </div>
 
               <div className="grid grid-cols-2 gap-3 mt-4 text-xs">
                 <label className="flex flex-col gap-1 text-slate-400">
-                  Segment length
+                  Clip duration
                   <select
                     value={segmentMs}
                     disabled={recording}
@@ -354,7 +353,7 @@ export default function EncoderPage() {
                   </select>
                 </label>
                 <label className="flex flex-col gap-1 text-slate-400">
-                  Local retention (loop recording)
+                  Keep unlocked clips for
                   <select
                     value={retentionMs}
                     onChange={(e) => setRetentionMs(Number(e.target.value))}
@@ -367,12 +366,27 @@ export default function EncoderPage() {
                 </label>
               </div>
 
-              {error && <p className="mt-3 text-sm text-red-400">⚠ {error}</p>}
-            </Card>
+              {error && <p className="mt-3 text-sm text-red-400">{error}</p>}
 
-            {/* ── Latest fingerprint + device identity ─────────────────── */}
-            <div className="lg:col-span-2 space-y-5">
-              <Card title="Last segment fingerprint">
+          <div className="drive-metrics grid grid-cols-2 gap-3">
+            <Stat label="Session time" value={startedAt ? formatElapsed(now - startedAt) : "—"} tone="indigo" />
+            <Stat label="Clips captured" value={stats.recorded} tone="green" />
+            <Stat label="Cloud receipts" value={stats.sent} tone="sky" />
+            <Stat label="Awaiting sync" value={pending} tone={pending ? "amber" : "slate"} />
+            <Stat label="Local library" value={segments.length} sub={formatBytes(localBytes)} />
+            <Stat label="Auto-cleared" value={stats.purged} sub={`after ${retentionMs / 60000} min`} />
+          </div>
+          {storage && storage.quota > 0 && (
+            <p className="capture-storage">
+              Browser storage: {formatBytes(storage.usage)} used of {formatBytes(storage.quota)}
+            </p>
+          )}
+
+
+            </Card>
+          </div>
+          <div className="identity-grid">
+              <Card title="Latest seal">
                 {last ? (
                   <dl className="text-[11px] font-mono space-y-1.5 break-all">
                     <Row k="seq" v={`#${last.seq} · ${formatClock(last.started_at)} → ${formatClock(last.ended_at)}`} />
@@ -382,32 +396,32 @@ export default function EncoderPage() {
                     <Row k="signature" v={short(last.signature, 44)} />
                   </dl>
                 ) : (
-                  <div className="fingerprint-empty"><div className="fingerprint-art"><WorkspaceIcon name="shield" /></div><strong>A signature for every moment.</strong><p>Your latest fingerprint will appear here once recording begins.</p></div>
+                  <div className="fingerprint-empty"><div className="fingerprint-art"><WorkspaceIcon name="shield" /></div><strong>Each moment leaves its own seal.</strong><p>Begin a session to see its signed fingerprint.</p></div>
                 )}
               </Card>
-              <Card title="Device identity" subtitle="The public fingerprint for this recording device.">
+              <Card title="Recording identity" subtitle="The public fingerprint for this recording device.">
                 <div className="flex items-center gap-3">
                   <span className="brand-emblem"><WorkspaceIcon name="shield" /></span>
                   <div className="min-w-0"><p className="text-sm font-mono text-indigo-300 break-all">{identity?.fingerprint ?? "Preparing your device…"}</p><p className="text-[10px] text-slate-500 mt-1 break-all">{identity?.deviceId}</p></div>
                 </div>
               </Card>
-            </div>
           </div>
 
           {/* ── Local recordings ─────────────────────────────────────────── */}
           <Card
-            title={`Recordings on this phone (${segments.length})`}
-            subtitle="Unlocked segments are deleted automatically when older than the retention period. Locked segments are kept for a claim."
+            title={`Video library (${videoGroups.length})`}
+            subtitle="Each entry groups the clips from one recording session. Expand a video to select, play, or save its clips."
             right={
               <div className="flex flex-wrap gap-2">
                 <Button small onClick={() => setSelected(new Set(segments.filter((s) => s.locked).map((s) => s.key)))}>
-                  Select locked
+                  Choose protected
                 </Button>
-                <Button small onClick={downloadSelected} disabled={!chosen.length}>⬇ Download ({chosen.length})</Button>
+                <Button small onClick={downloadSelected} disabled={!chosen.length}>Save clips ({chosen.length})</Button>
+                <Button small onClick={() => downloadBlob(new Blob([chosen.map((clip) => clip.record.segment_hash).join("\n") + "\n"], { type: "text/plain" }), `dashcam-hashes-${Date.now()}.txt`)} disabled={!chosen.length}>Save hash list</Button>
                 <Button small tone="primary" onClick={uploadSelected} disabled={!chosen.length || !!busy}>
-                  {busy ?? `☁ Send to insurer (${chosen.length})`}
+                  {busy ?? `Submit evidence (${chosen.length})`}
                 </Button>
-                <Button small tone="danger" onClick={wipe} disabled={recording}>Wipe</Button>
+                <Button small tone="danger" onClick={wipe} disabled={recording}>Clear local library</Button>
               </div>
             }
           >
@@ -417,22 +431,31 @@ export default function EncoderPage() {
                 <p className="text-[11px] text-slate-500 mt-1 font-mono">{preview.name}</p>
               </div>
             )}
+            {videoGroups.map((group) => (
+              <details key={group.sessionId} className="video-session">
+                <summary>
+                  <div><strong>Video · {new Date(group.startedAt).toLocaleDateString()} · {formatClock(group.startedAt)}</strong>
+                    <p>{group.clips.length} clips · {formatBytes(group.clips.reduce((sum, clip) => sum + clip.blob.size, 0))} · session {group.sessionId.slice(0, 8)}</p>
+                  </div>
+                  <span>View clips</span>
+                </summary>
+                <div className="px-4 pt-3"><Button small onClick={() => setSelected((current) => new Set([...current, ...group.clips.map((clip) => clip.key)]))}>Choose this video</Button></div>
             <div className="overflow-x-auto max-h-[45vh] overflow-y-auto">
               <table className="w-full text-xs">
                 <thead className="text-slate-500 text-left sticky top-0 bg-slate-900">
                   <tr>
                     <th className="p-2"></th>
-                    <th className="p-2">Seq</th>
+                    <th className="p-2">Clip</th>
                     <th className="p-2">Time</th>
                     <th className="p-2">Size</th>
                     <th className="p-2 hidden sm:table-cell">SHA-256</th>
-                    <th className="p-2">Hash</th>
-                    <th className="p-2">Retention</th>
+                    <th className="p-2">Cloud sync</th>
+                    <th className="p-2">Keep until</th>
                     <th className="p-2 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800">
-                  {[...segments].reverse().map((s) => {
+                  {group.clips.map((s) => {
                     const expiresIn = s.record.ended_at + retentionMs - now;
                     return (
                       <tr key={s.key} className={s.locked ? "bg-amber-500/5" : ""}>
@@ -446,31 +469,30 @@ export default function EncoderPage() {
                         <td className="p-2 font-mono text-slate-400">{formatClock(s.record.started_at)}</td>
                         <td className="p-2 font-mono text-slate-400">{formatBytes(s.blob.size)}</td>
                         <td className="p-2 font-mono text-slate-500 hidden sm:table-cell">{short(s.record.segment_hash, 16)}</td>
-                        <td className="p-2">{s.sent ? <Badge tone="green">sent</Badge> : <Badge tone="amber">queued</Badge>}</td>
+                        <td className="p-2">{s.sent ? <Badge tone="green">Synced</Badge> : <Badge tone="amber">Pending</Badge>}</td>
                         <td className="p-2">
                           <button onClick={async () => { await setLocked(s.key, !s.locked); await refreshSegments(); }} className="text-left">
-                            {s.locked ? <Badge tone="amber">🔒 locked</Badge> : <span className="font-mono text-slate-400">{expiresIn > 0 ? `${Math.ceil(expiresIn / 1000)} s` : "expiring"}</span>}
+                            {s.locked ? <Badge tone="amber">Protected</Badge> : <span className="font-mono text-slate-400">{expiresIn > 0 ? `${Math.ceil(expiresIn / 1000)} s` : "expiring"}</span>}
                           </button>
                         </td>
                         <td className="p-2 text-right whitespace-nowrap space-x-1">
-                          <Button small onClick={() => openPreview(s)}>▶</Button>
-                          <Button small onClick={() => downloadBlob(s.blob, s.fileName)}>⬇</Button>
+                          <Button small onClick={() => openPreview(s)}>Play</Button>
+                          <Button small onClick={() => downloadBlob(s.blob, s.fileName)}>Save</Button>
                         </td>
                       </tr>
                     );
                   })}
-                  {!segments.length && (
-                    <tr>
-                      <td colSpan={8} className="p-6 text-center text-slate-500">No recordings stored.</td>
-                    </tr>
-                  )}
+
                 </tbody>
               </table>
             </div>
+              </details>
+            ))}
+            {!videoGroups.length && <p className="empty-note">Begin a journey to create your first video.</p>}
           </Card>
 
           {/* ── Event log ────────────────────────────────────────────────── */}
-          <Card title="Event log">
+          <Card title="Session activity">
             <div className="max-h-56 overflow-y-auto font-mono text-[11px] space-y-0.5">
               {logs.map((l, i) => (
                 <p key={i} className={l.level === "error" ? "text-red-400" : l.level === "warn" ? "text-amber-300" : "text-slate-400"}>
