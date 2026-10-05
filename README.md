@@ -75,7 +75,7 @@ Ordinary video segments remain on the device. Sending selected evidence explicit
 
 ### 5. Supabase backend
 
-Apply **only `web/supabase/schema.sql`** to the separate Dashcam Reference App project. The older root migrations target the earlier application.
+Apply **`web/supabase/schema.sql`** to the separate Dashcam Reference App project. The obsolete root migrations have been removed because their workspace-based `devices` table conflicts with this schema. They remain recoverable from Git history.
 
 | Resource | Responsibility |
 | --- | --- |
