@@ -1,89 +1,39 @@
-> Reference implementation: [hoangtrietdev/video-fingerprint-app](https://github.com/hoangtrietdev/video-fingerprint-app) at `2320d470b2bedf5836de35c98d1c6cf6bfbf39fb`.
->
-> Use a **separate Supabase project** and apply `web/supabase/schema.sql` there. The reference uses anonymous access and overlaps with the earlier secure tables and bucket. See [reference analysis](docs/REFERENCE_ANALYSIS.md) before setup. Existing cloud and browser data have not been migrated.
+# Dashcam Assurance web application
 
-# Dashcam Integrity System — Encoder & Decoder
+This is the deployed Next.js application. Its glass/bento interface is customized for Dashcam Assurance; its integrity protocol and Supabase schema are adapted from the pinned upstream reference.
 
-A smartphone used as a **dashcam** records the road, fingerprints every few seconds of video and
-anchors the fingerprints on a server; an **insurer** later retrieves the clip and proves, cryptographically,
-that it has not been modified, cut or forged.
+Read the [root README](../README.md) for the full code walkthrough: recording, IndexedDB, device identity, SHA-256 hash chains, ECDSA signatures, the persistent outbox, retention, Supabase policies, verification, and evaluation.
 
-| Component | Runs on | URL | Report |
-|---|---|---|---|
-| **Encoder / Transmitter** | driver's smartphone (mobile web app) | `/` | [docs/ENCODER.md](docs/ENCODER.md) |
-| **Decoder** | insurer's computer (web app) | `/admin` | [docs/DECODER.md](docs/DECODER.md) |
-| **Evaluation Dashboard** | any browser | `/evaluation` | [docs/EVALUATION.md](docs/EVALUATION.md) |
-| Installation / configuration / run (both) | | | [docs/SETUP.md](docs/SETUP.md) |
+## Routes
 
+- `/`: Capture studio.
+- `/admin`: Evidence workspace (live monitor and evidence verification).
+- `/demo`: Integrity playground.
+- `/evaluation`: Evaluation lab.
 
-## Quick start
+## Development
 
 ```bash
 npm ci
-# 1. create a Supabase project and run supabase/schema.sql in its SQL editor
-# 2. create .env.local:
-#    NEXT_PUBLIC_SUPABASE_URL=https://<ref>.supabase.co
-#    NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<anon key>
-npm run dev            # computer: http://localhost:3000 and /admin
-npm run dev:https      # phone on same Wi-Fi: https://<LAN-IP>:3000
-npm run selftest       # automated integrity tests
+# Copy .env.example to .env.local and configure the public Supabase values.
+npm run dev -- --port 3010
 ```
 
-## How it works (one minute)
+Use the separate Dashcam Reference App backend and apply `supabase/schema.sql`. Do not apply the old root migrations to this project.
 
-```
-PHONE (Encoder)                                   SERVER (Supabase)             INSURER (Decoder)
-camera → frames → canvas overlay → 5 s segments
-  segment_hash = SHA-256(file)
-  chain_hash   = SHA-256(record ‖ prev_chain_hash)  ── HTTPS ──►  video_segments   ◄── Realtime / queries
-  signature    = ECDSA-P256(device key, chain)      (outbox,      insert-only,
-video kept on phone (loop recording, retention)      retry)       server time
-incident → clip uploaded ───────────────────────────────────────► Storage "evidence" ──► retrieve + verify:
-                                                                                 hash · signature · chain · gaps
+## Checks
+
+```bash
+npm run typecheck
+npm run lint
+npm run selftest
+npm run build
 ```
 
-## Requirement coverage
+## Design and implementation
 
-| Requirement | Where |
-|---|---|
-| Frame acquisition from the camera | `src/lib/recorder.ts` (`getUserMedia`, 15 fps frame grab) |
-| Video composition / processing | canvas overlay + `MediaRecorder` segments — `recorder.ts` |
-| Hash generation | SHA-256 + hash chain + ECDSA — `src/lib/integrity.ts` |
-| Dynamic transmission | outbox + transmitter — `src/lib/transmitter.ts`, Realtime on Decoder |
-| Network interruptions | persistent outbox, back-off, idempotent inserts, simulate button |
-| Deletion of expired data | loop recording `src/lib/retention.ts`; server purge `purge_expired_segments()` |
-| Integrity verification + detection | `src/lib/verifier.ts`, Decoder "Verify evidence" + tamper lab |
-| Perceptual hash metrics (aHash/dHash/pHash/wHash) | `src/lib/fingerprintMetrics.ts` |
-| Fuzzy hashing (ssdeep, TLSH) | `src/lib/fingerprintMetrics.ts` |
-| Vector metrics (L1, L2, cosine) | `src/lib/fingerprintMetrics.ts` |
-| Threshold evaluation (precision/recall/F1) | `src/lib/fingerprintMetrics.ts` + `/evaluation` |
-| Evaluation dashboard (all §1–§7 scenarios) | `src/pages/evaluation.tsx` — `/evaluation` |
-| Evaluation report | [docs/EVALUATION.md](docs/EVALUATION.md) |
-| Environment reproduction | `docs/SETUP.md` |
+`src/components/app-shell.tsx` provides vertical navigation, `src/components/ui.tsx` provides shared controls, and `src/styles/globals.css` defines the glass surfaces, palette, and responsive bento presentation. Capture, transmission, signatures, retention, and verification remain in `src/lib/`.
 
-## Project structure
+The “How verification works” tab and explanatory overview panels have been removed from the interface; the explanation is maintained in the README.
 
-```
-supabase/schema.sql        tables, triggers (server time, immutability), RLS, purge, bucket, realtime
-src/lib/config.ts          tunable parameters
-src/lib/integrity.ts       protocol shared by both apps (SHA-256, canonical record, chain, ECDSA)
-src/lib/fingerprintMetrics.ts perceptual hashes, fuzzy hashes, vector metrics, threshold evaluation
-src/lib/recorder.ts        Encoder: camera → composition → segments → hash/sign → store
-src/lib/transmitter.ts     Encoder: store-and-forward hash transmission
-src/lib/retention.ts       Encoder: loop recording, incident lock
-src/lib/localStore.ts      Encoder: IndexedDB persistence
-src/lib/deviceIdentity.ts  Encoder: device id + non-extractable key pair
-src/lib/verifier.ts        Decoder: verification engine
-src/lib/repository.ts      Decoder: Supabase queries, evidence bucket
-src/lib/tamperLab.ts       Decoder: tampering simulations for the demo
-src/pages/index.tsx        Encoder UI
-src/pages/admin.tsx        Decoder UI
-src/pages/evaluation.tsx   Evaluation dashboard (§1–§7 scenarios + metrics + thresholds)
-scripts/selftest.ts        automated tests of the protocol and the verifier
-docs/EVALUATION.md         comprehensive evaluation report
-```
-
-## Open-source components
-
-Next.js, React, TypeScript, Tailwind CSS, Supabase (`@supabase/supabase-js`), tsx (tests).
-Cryptography uses only the browser-native Web Crypto API. Application logic is adapted from the reference repository linked above.
+[Setup](docs/SETUP.md) · [Reference analysis](docs/REFERENCE_ANALYSIS.md) · [Encoder](docs/ENCODER.md) · [Decoder](docs/DECODER.md) · [Evaluation](docs/EVALUATION.md)

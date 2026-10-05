@@ -7,6 +7,7 @@
  */
 
 import Head from "next/head";
+import { WorkspaceIcon } from "@/components/app-shell";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Badge, Button, Card, ConfigWarning, Stat, TopNav } from "@/components/ui";
@@ -268,11 +269,11 @@ export default function EncoderPage() {
       <Head>
         <title>Dashcam Encoder</title>
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-        <meta name="theme-color" content="#020617" />
+        <meta name="theme-color" content="#f7f2f6" />
       </Head>
 
       <div className="min-h-screen bg-slate-950 text-white">
-        <TopNav icon="🎥" kicker="Encoder / Transmitter" title="Driver Dashcam" href="/admin" hrefLabel="Decoder" right={<Link href="/demo" className="text-xs text-slate-400 hover:text-white whitespace-nowrap">Fraud Demo →</Link>} />
+        <TopNav icon="🎥" kicker="DRIVER WORKSPACE" title="Capture studio" href="/admin" hrefLabel="Decoder" right={<Link href="/demo" className="text-xs text-slate-400 hover:text-white whitespace-nowrap">Fraud Demo →</Link>} />
 
         <main className="max-w-6xl mx-auto px-4 py-5 space-y-5">
           {!supabaseConfigured && <ConfigWarning />}
@@ -294,14 +295,28 @@ export default function EncoderPage() {
             )}
           </div>
 
+          <div className="capture-stats grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+            <Stat label="Elapsed" value={startedAt ? formatElapsed(now - startedAt) : "—"} tone="indigo" />
+            <Stat label="Segments recorded" value={stats.recorded} tone="green" />
+            <Stat label="Hashes sent" value={stats.sent} tone="sky" />
+            <Stat label="Outbox (pending)" value={pending} tone={pending ? "amber" : "slate"} />
+            <Stat label="Stored on phone" value={segments.length} sub={formatBytes(localBytes)} />
+            <Stat label="Deleted (expired)" value={stats.purged} sub={`after ${retentionMs / 60000} min`} />
+          </div>
+          {storage && storage.quota > 0 && (
+            <p className="capture-storage">
+              Browser storage: {formatBytes(storage.usage)} used of {formatBytes(storage.quota)}
+            </p>
+          )}
+
           <div className="grid lg:grid-cols-5 gap-5">
             {/* ── Camera / composition ───────────────────────────────────── */}
-            <Card className="lg:col-span-3" title="Live road recording" subtitle="Camera frames are composed on a canvas (timestamp · ids · GPS overlay) and encoded into fixed-length segments.">
-              <div className="relative w-full aspect-video bg-black rounded-xl overflow-hidden border border-slate-700">
+            <Card className="capture-card lg:col-span-3" title="Live capture" subtitle="Your journey, captured and protected. Start recording when you are ready.">
+              <div className="capture-preview relative w-full aspect-video overflow-hidden">
                 <canvas ref={canvasRef} className="w-full h-full object-contain" />
                 {!recording && (
-                  <div className="absolute inset-0 flex items-center justify-center text-slate-500 text-sm">
-                    {rec === "starting" ? "Opening camera…" : "Camera inactive"}
+                  <div className="capture-empty absolute inset-0 flex items-center justify-center">
+                    <WorkspaceIcon name="capture" /><strong>{rec === "starting" ? "Opening camera…" : "Ready for the road"}</strong><p>Your live view will appear here.</p><span>CAPTURE · PROTECT · VERIFY</span>
                   </div>
                 )}
               </div>
@@ -355,22 +370,8 @@ export default function EncoderPage() {
               {error && <p className="mt-3 text-sm text-red-400">⚠ {error}</p>}
             </Card>
 
-            {/* ── Stats + last hash ─────────────────────────────────────── */}
+            {/* ── Latest fingerprint + device identity ─────────────────── */}
             <div className="lg:col-span-2 space-y-5">
-              <div className="grid grid-cols-2 gap-3">
-                <Stat label="Elapsed" value={startedAt ? formatElapsed(now - startedAt) : "—"} tone="indigo" />
-                <Stat label="Segments recorded" value={stats.recorded} tone="green" />
-                <Stat label="Hashes sent" value={stats.sent} tone="sky" />
-                <Stat label="Outbox (pending)" value={pending} tone={pending ? "amber" : "slate"} />
-                <Stat label="Stored on phone" value={segments.length} sub={formatBytes(localBytes)} />
-                <Stat label="Deleted (expired)" value={stats.purged} sub={`after ${retentionMs / 60000} min`} />
-              </div>
-              {storage && storage.quota > 0 && (
-                <p className="text-[11px] text-slate-500">
-                  Browser storage: {formatBytes(storage.usage)} used of {formatBytes(storage.quota)}
-                </p>
-              )}
-
               <Card title="Last segment fingerprint">
                 {last ? (
                   <dl className="text-[11px] font-mono space-y-1.5 break-all">
@@ -381,8 +382,14 @@ export default function EncoderPage() {
                     <Row k="signature" v={short(last.signature, 44)} />
                   </dl>
                 ) : (
-                  <p className="text-xs text-slate-500">No segment yet — start recording.</p>
+                  <div className="fingerprint-empty"><div className="fingerprint-art"><WorkspaceIcon name="shield" /></div><strong>A signature for every moment.</strong><p>Your latest fingerprint will appear here once recording begins.</p></div>
                 )}
+              </Card>
+              <Card title="Device identity" subtitle="The public fingerprint for this recording device.">
+                <div className="flex items-center gap-3">
+                  <span className="brand-emblem"><WorkspaceIcon name="shield" /></span>
+                  <div className="min-w-0"><p className="text-sm font-mono text-indigo-300 break-all">{identity?.fingerprint ?? "Preparing your device…"}</p><p className="text-[10px] text-slate-500 mt-1 break-all">{identity?.deviceId}</p></div>
+                </div>
               </Card>
             </div>
           </div>
