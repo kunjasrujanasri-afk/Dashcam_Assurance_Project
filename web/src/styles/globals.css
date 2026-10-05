@@ -130,7 +130,14 @@ button:not(:disabled), select:not(:disabled) { cursor: pointer; }
 .journey-entry dl { display: flex; justify-content: space-between; gap: 8px; margin: 18px 0; }
 .journey-entry dt { font-size: 9px; color: #6f899b; } .journey-entry dd { font-size: 11px; margin-top: 4px; font-variant-numeric: tabular-nums; }
 .empty-note { padding: 20px 0; font-size: 12px; color: #678496; }
-.experiment-layout { display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 24px; align-items: start; }
+.experiment-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; }
+.experiment-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 14px; }
+.trial-tabs { display: flex; gap: 6px; min-width: 0; overflow-x: auto; padding: 3px; }
+.trial-tabs button { flex-shrink: 0; padding: 13px 18px; border: 1px solid transparent; border-radius: 999px; color: #54768d; font-size: 12px; cursor: pointer; white-space: nowrap; }
+.trial-tabs button:hover { background: #ffffff66; }
+.trial-tabs button[aria-selected="true"] { color: #fff; background: #345f7d; border-color: #ffffff80; box-shadow: 0 5px 14px #345f7d20; }
+.trial-dropdown { display: grid; gap: 6px; flex: 0 0 190px; }
+.trial-dropdown .section-caption { font-size: 8px; }
 .experiment-index { padding: 22px 12px; position: sticky; top: 20px; }
 .experiment-index > .section-caption { padding: 0 10px; margin-bottom: 20px; }
 .index-note { font-size: 10px; line-height: 1.8; color: #6b879b; padding: 22px 10px 0; }
@@ -167,7 +174,7 @@ button:not(:disabled), select:not(:disabled) { cursor: pointer; }
 .workspace-footer span:first-child { color: #597b92; }
 @media (max-width: 1150px) {
   .page-edition { display: none; } .drive-layout { grid-template-columns: 1.25fr 1fr; }
-  .experiment-layout { grid-template-columns: 170px minmax(0, 1fr); gap: 16px; }
+  .experiment-toolbar { flex-wrap: wrap; } .trial-tabs { flex: 1 1 100%; } .trial-dropdown { flex: 1 1 190px; }
   .signal-layout { grid-template-columns: 210px minmax(0, 1fr); gap: 16px; }
   .ledger-grid { grid-template-columns: 1fr; } .journey-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

@@ -104,14 +104,22 @@ export default function FraudDemoPage() {
           {!supabaseConfigured && <ConfigWarning />}
 
           <div className="experiment-layout">
-            <aside className="experiment-index glass-card">
+            <div className="experiment-toolbar glass-card">
+              <div className="trial-tabs" role="tablist" aria-label="Integrity trials">
+                {SCENARIOS.map((trial) => (
+                  <button key={trial.key} type="button" role="tab" id={`trial-tab-${trial.key}`}
+                    aria-selected={scenario === trial.key} aria-controls="trial-panel"
+                    onClick={() => setScenario(trial.key)}>{trial.title}</button>
+                ))}
+              </div>
+              <div className="trial-dropdown">
               <label htmlFor="trial-select" className="section-caption">SELECT A TRIAL</label>
-              <select id="trial-select" value={scenario} onChange={(event) => setScenario(event.target.value as Scenario)} className="w-full mt-4">
+              <select id="trial-select" value={scenario} onChange={(event) => setScenario(event.target.value as Scenario)}>
                 {SCENARIOS.map((trial) => <option key={trial.key} value={trial.key}>{trial.title}</option>)}
               </select>
-              <p className="index-note">Changes apply to copies only.</p>
-            </aside>
-            <div className="experiment-content">
+              </div>
+            </div>
+            <div className="experiment-content" id="trial-panel" role="tabpanel" aria-labelledby={`trial-tab-${scenario}`}>
               <ScenarioDemo key={scenario} config={SCENARIOS.find((s) => s.key === scenario)!} />
             </div>
           </div>
