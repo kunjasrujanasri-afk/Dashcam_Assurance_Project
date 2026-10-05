@@ -518,7 +518,7 @@ export default function EvaluationPage() {
                 { label: "Missed Matches", value: summary.missedMatch, tone: "amber" as const },
                 { label: "Correct Detections", value: summary.correctDetect, tone: "green" as const },
               ].map(({ label, value, tone }) => (
-                <div key={label} className="bg-slate-900/60 border border-slate-700/60 rounded-xl p-3 text-center">
+                <div key={label} className="evaluation-stat bg-slate-900/60 border border-slate-700/60 rounded-xl p-3 text-center">
                   <p className="text-[10px] uppercase tracking-wider text-slate-500 mb-1">{label}</p>
                   <p className={`text-2xl font-bold font-mono ${tone === "green" ? "text-emerald-400" : tone === "red" ? "text-red-400" : tone === "amber" ? "text-amber-400" : tone === "sky" ? "text-sky-400" : "text-slate-300"}`}>{value}</p>
                 </div>
@@ -527,7 +527,7 @@ export default function EvaluationPage() {
           )}
 
           {/* Category tabs */}
-          <div className="flex gap-2 overflow-x-auto pb-1 border-b border-slate-800">
+          <div className="scenario-tabs flex gap-2 overflow-x-auto pb-1 border-b border-slate-800">
             {cats.map((cat) => (
               <button
                 key={cat}

@@ -1,26 +1,99 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+:root { color-scheme: light; --ink: #172c3b; --muted: #607383; --accent: #176c82; --line: #b7cbd24d; }
+@theme inline { --font-sans: "Segoe UI", "Helvetica Neue", Arial, sans-serif; --font-mono: "Cascadia Code", Consolas, monospace; }
+body { margin: 0; background: #edf3f6; color: var(--ink); font-family: var(--font-sans); -webkit-font-smoothing: antialiased; }
+::selection { background: #9edfd7; color: #143641; }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
+/* Presentation only; capture, authentication and verification remain unchanged. */
+.assurance-ui { min-height: 100vh; isolation: isolate; background: radial-gradient(ellipse at 4% 12%, #bce8e5aa, transparent 43%), radial-gradient(ellipse at 96% 32%, #d4d2f4bb, transparent 42%), radial-gradient(ellipse at 44% 94%, #e6ddd099, transparent 50%), #eef4f6; background-attachment: fixed; }
+.assurance-ui > div { min-height: 100vh; }
+.assurance-ui main[class*="max-w-"] { max-width: 1240px; padding: 30px 30px 76px; }
+.assurance-ui main[class*="max-w-"] > * + * { margin-top: 24px; }
+.assurance-ui .bg-slate-950 { background: transparent; }
+.assurance-ui :is(.text-white, .text-slate-100, .text-slate-200, .text-slate-300) { color: var(--ink); }
+.assurance-ui :is(.text-slate-400, .text-slate-500) { color: var(--muted); }
+.assurance-ui :is(.text-slate-600, .text-slate-700) { color: #536b7c; }
+.assurance-ui :is(.text-indigo-300, .text-indigo-400, .text-indigo-500, .text-sky-300, .text-sky-400) { color: #24677f; }
+.assurance-ui :is(.text-emerald-300, .text-emerald-400) { color: #177563; }
+.assurance-ui :is(.text-red-300, .text-red-400, .text-rose-400) { color: #b33e54; }
+.assurance-ui :is(.text-amber-300, .text-amber-400, .text-orange-400) { color: #9a621e; }
+.assurance-ui :is(.text-violet-400, .text-purple-400) { color: #765ba2; }
+.assurance-ui [class*="border-slate-"] { border-color: var(--line); }
+.assurance-ui :is(.bg-slate-900, .bg-slate-800, .bg-slate-700, .bg-slate-600) { background: #ffffff73; }
+.assurance-ui :is([class~="bg-slate-900/60"], [class~="bg-slate-800/50"], [class~="bg-slate-800/60"], [class~="bg-slate-700/40"]) { background: #ffffff68; }
+.assurance-ui [class~="hover:bg-slate-800"]:hover, .assurance-ui [class~="hover:bg-slate-800/30"]:hover { background: #d5e9ed59; color: var(--ink); }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
+.glass-header { background: #f5faf96b; border-bottom: 1px solid #ffffffc4; backdrop-filter: blur(24px) saturate(145%); -webkit-backdrop-filter: blur(24px) saturate(145%); box-shadow: 0 8px 40px #49677906; }
+.glass-nav { max-width: 1240px; margin: auto; padding: 18px 30px; display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.glass-brand { display: flex; align-items: center; gap: 11px; color: #193d4b; font-size: 21px; font-weight: 650; letter-spacing: -.7px; line-height: 1.05; }
+.glass-brand-mark { display: grid; place-items: center; width: 43px; height: 43px; border-radius: 15px; border: 1px solid #ffffffb3; background: linear-gradient(145deg, #31978d, #1a4e68); box-shadow: 0 6px 18px #296a6f28, inset 0 1px 0 #ffffff66; color: white; font-size: 30px; font-weight: 400; }
+.glass-brand-sub { display: block; margin-top: 5px; font-size: 9px; letter-spacing: 2.4px; font-weight: 500; }
+.glass-nav-links { display: flex; gap: 10px; align-items: center; }
+.glass-nav-links a { border-radius: 999px; padding: 9px 16px; border: 1px solid #ffffffcf; background: #ffffff57; color: #416271; font-size: 12px; font-weight: 600; transition: background .2s, box-shadow .2s; }
+.glass-nav-links a:hover { background: #ffffffce; color: #174957; box-shadow: 0 4px 12px #47697310; }
+.glass-page-heading { max-width: 1240px; margin: auto; padding: 12px 30px 25px; display: flex; align-items: center; justify-content: space-between; }
+.glass-eyebrow { margin-bottom: 7px; text-transform: uppercase; letter-spacing: 2.1px; font-size: 9px; font-weight: 650; color: #557681; }
+.glass-page-heading h1 { font-size: clamp(24px, 3vw, 34px); font-weight: 500; letter-spacing: -1.3px; line-height: 1.15; color: #193747; }
+.glass-page-symbol { display: grid; place-items: center; font-size: 24px; width: 56px; height: 56px; background: #ffffff6e; border: 1px solid #ffffffcf; border-radius: 20px; box-shadow: inset 0 1px 0 white; }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+.assurance-ui .glass-card, .assurance-ui .glass-login { position: relative; background: linear-gradient(125deg, #ffffffa6, #ffffff61); border: 1px solid #ffffffdf; border-radius: 24px; padding: 25px; box-shadow: 0 16px 42px #5876870c, inset 0 1px 0 #ffffff; backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); }
+.glass-card-heading { margin-bottom: 22px; padding-bottom: 16px; border-bottom: 1px solid #a3bec426; }
+.glass-card-heading h2 { font-size: 17px; letter-spacing: -.35px; font-weight: 650; }
+.glass-card-heading p { margin-top: 5px; font-size: 12px; line-height: 1.6; }
+.assurance-ui .glass-stat, .assurance-ui .evaluation-stat { position: relative; text-align: left; border: 1px solid #ffffffd9; border-radius: 20px; background: linear-gradient(145deg, #ffffff9c, #ffffff42); padding: 19px 18px; box-shadow: 0 8px 26px #55778608, inset 0 1px 0 #ffffff; backdrop-filter: blur(16px); }
+.glass-stat::before, .evaluation-stat::before { content: ""; display: block; width: 22px; height: 3px; border-radius: 4px; background: #78b9bd; margin-bottom: 15px; }
+.assurance-ui :is(.glass-stat, .evaluation-stat) > p:first-of-type { font-size: 9px; letter-spacing: 1.1px; font-weight: 650; }
+.assurance-ui :is(.glass-stat, .evaluation-stat) > p:nth-of-type(2) { font-family: var(--font-sans); font-size: 31px; font-weight: 500; letter-spacing: -1.4px; line-height: 1.2; }
+.assurance-ui .glass-badge { font-size: 10px; font-weight: 650; border-color: #ffffffb3; padding: 5px 10px; box-shadow: inset 0 1px 0 #ffffff61; }
+.assurance-ui button { transition: background .2s, box-shadow .2s, transform .2s; }
+.assurance-ui button:not(:disabled) { cursor: pointer; }
+.assurance-ui :is(button, a, input, select, summary):focus-visible { outline: 3px solid #429aaa7a; outline-offset: 3px; }
+.assurance-ui .glass-button { border: 1px solid #ffffffa6; border-radius: 12px; font-size: 12px; letter-spacing: .1px; font-weight: 650; box-shadow: inset 0 1px 0 #ffffff40, 0 5px 13px #587b8a10; }
+.assurance-ui .glass-button:not(:disabled):hover { transform: translateY(-1px); box-shadow: inset 0 1px 0 #ffffff66, 0 7px 20px #416e7c20; }
+.assurance-ui :is(.glass-button-primary, .bg-indigo-600) { color: #ffffff; background: linear-gradient(120deg, #227e8b, #295b80); border-color: #ffffff52; }
+.assurance-ui .glass-button-success { color: #ffffff; background: linear-gradient(120deg, #288b7a, #246774); }
+.assurance-ui .glass-button-danger { color: #ffffff; background: linear-gradient(120deg, #c76475, #a6455e); }
+.assurance-ui .glass-button-warn { color: #704621; background: #f2dcbba1; }
+.assurance-ui .glass-button-slate { background: #ffffff8c; color: #3b6273; }
+.assurance-ui input:not([type="checkbox"]):not([type="range"]):not([type="file"]), .assurance-ui select, .assurance-ui textarea { background: #f9fcfc80; color: #244555; border: 1px solid #aac8d263; border-radius: 11px; padding: 10px 12px; box-shadow: inset 0 2px 5px #446b7505; min-width: 0; }
+.assurance-ui input[type="checkbox"], .assurance-ui input[type="range"] { accent-color: #257d88; }
+.assurance-ui input[type="file"] { color: #446775; font-size: 12px; }
+.assurance-ui input[type="file"]::file-selector-button { margin-right: 14px; border: 1px solid #ffffffb3; border-radius: 10px; background: #ffffff8c; color: #2e5b6c; padding: 9px 13px; cursor: pointer; }
+.assurance-ui label { color: #527080; font-weight: 500; }
+.assurance-ui table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12px; }
+.assurance-ui thead { background: #e3eef245; }
+.assurance-ui th { color: #607d8b; font-size: 9px; letter-spacing: .9px; text-transform: uppercase; font-weight: 650; padding: 13px 11px; white-space: nowrap; }
+.assurance-ui td { padding: 15px 11px; border-bottom: 1px solid #abc6cd26; }
+.assurance-ui tr { border-color: #b3cad333; }
+.assurance-ui tbody tr:last-child td { border-bottom: 0; }
+.assurance-ui td .text-slate-500 { font-size: 11px; line-height: 1.6; }
+.assurance-ui code { color: #3d6b79; }
+.assurance-ui .scenario-tabs { padding: 7px; gap: 6px; border: 1px solid #ffffffbd; border-radius: 16px; background: #ffffff40; backdrop-filter: blur(18px); }
+.assurance-ui .scenario-tabs button { border-radius: 10px; padding: 10px 15px; font-size: 11px; }
+.assurance-ui .glass-login { padding: 36px; max-width: 450px; }
+.assurance-ui .glass-login h1 { font-size: 31px; line-height: 1.2; font-weight: 500; letter-spacing: -1px; }
+.assurance-ui .glass-login > p:first-child { color: #327c88; font-weight: 600; letter-spacing: 2px; }
+.assurance-ui .glass-login form > button { color: #ffffff; border-radius: 13px; box-shadow: 0 8px 24px #236a812b; }
+.assurance-ui .glass-account { background: #f9ffffa6; border: 1px solid #ffffffd9; box-shadow: 0 6px 30px #345b7214; backdrop-filter: blur(18px); border-radius: 999px; }
+.assurance-ui .bg-black { background: #162c38; }
+.assurance-ui .bg-black :is(.text-slate-400, .text-slate-500) { color: #b9ccd3; }
+.assurance-ui .bg-black video { border-radius: 15px; }
+@media (max-width: 767px) {
+  .glass-nav { padding: 14px 18px; gap: 10px; }
+  .glass-brand { font-size: 17px; gap: 8px; }
+  .glass-brand-mark { width: 36px; height: 36px; border-radius: 12px; }
+  .glass-nav-links { gap: 6px; }
+  .glass-nav-links a { font-size: 10px; padding: 8px 11px; }
+  .glass-page-heading { padding: 9px 18px 19px; }
+  .glass-page-heading h1 { font-size: 25px; letter-spacing: -.8px; }
+  .glass-page-symbol { width: 43px; height: 43px; border-radius: 15px; font-size: 20px; }
+  .glass-eyebrow { font-size: 8px; letter-spacing: 1.3px; max-width: 270px; }
+  .assurance-ui main[class*="max-w-"] { padding: 22px 16px 76px; }
+  .assurance-ui .glass-card { padding: 19px; border-radius: 20px; }
+  .assurance-ui :is(.glass-stat, .evaluation-stat) { padding: 16px; }
+  .assurance-ui .glass-login { padding: 28px; }
+  .assurance-ui .glass-account { max-width: calc(100vw - 24px); }
 }
+@media (prefers-reduced-motion: reduce) { .assurance-ui *, .assurance-ui *::before { animation: none !important; transition: none !important; } }
+@supports not (backdrop-filter: blur(1px)) { .glass-header, .assurance-ui .glass-card, .assurance-ui .glass-login { background: #f2f8f9; } }

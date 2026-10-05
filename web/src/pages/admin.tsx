@@ -52,7 +52,7 @@ export default function DecoderPage() {
         <TopNav icon="🛡️" kicker="Insurer · Decoder" title="Evidence Integrity Console" href="/" hrefLabel="Encoder" right={<Link href="/demo" className="text-xs text-slate-400 hover:text-white whitespace-nowrap">Fraud Demo →</Link>} />
         <main className="max-w-6xl mx-auto px-4 py-5 space-y-5">
           {!supabaseConfigured && <ConfigWarning />}
-          <div className="flex gap-2 border-b border-slate-800 pb-2 overflow-x-auto">
+          <div className="scenario-tabs flex gap-2 border-b border-slate-800 pb-2 overflow-x-auto">
             {(
               [
                 ["live", "Live monitor"],
