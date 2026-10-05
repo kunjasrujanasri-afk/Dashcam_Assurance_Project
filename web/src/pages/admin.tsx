@@ -32,7 +32,7 @@ import {
 } from "@/lib/verifier";
 import { downloadBlob, formatBytes, formatClock, short } from "@/utils/format";
 
-type Tab = "live" | "verify" | "how";
+type Tab = "live" | "verify";
 type RowCheck = "pending" | "ok" | "bad";
 interface LiveRow extends SegmentRow {
   check: RowCheck;
@@ -49,7 +49,7 @@ export default function DecoderPage() {
         <meta name="viewport" content="width=device-width, initial-scale=1" />
       </Head>
       <div className="min-h-screen bg-slate-950 text-white">
-        <TopNav icon="🛡️" kicker="Insurer · Decoder" title="Evidence Integrity Console" href="/" hrefLabel="Encoder" right={<Link href="/demo" className="text-xs text-slate-400 hover:text-white whitespace-nowrap">Fraud Demo →</Link>} />
+        <TopNav icon="🛡️" kicker="VERIFICATION WORKSPACE" title="Evidence workspace" href="/" hrefLabel="Encoder" right={<Link href="/demo" className="text-xs text-slate-400 hover:text-white whitespace-nowrap">Fraud Demo →</Link>} />
         <main className="max-w-6xl mx-auto px-4 py-5 space-y-5">
           {!supabaseConfigured && <ConfigWarning />}
           <div className="flex gap-2 border-b border-slate-800 pb-2 overflow-x-auto">
@@ -57,7 +57,6 @@ export default function DecoderPage() {
               [
                 ["live", "Live monitor"],
                 ["verify", "Verify evidence"],
-                ["how", "How verification works"],
               ] as [Tab, string][]
             ).map(([k, label]) => (
               <button
@@ -78,7 +77,6 @@ export default function DecoderPage() {
           <div className={tab === "verify" ? "" : "hidden"}>
             <VerifyEvidence />
           </div>
-          {tab === "how" && <HowItWorks />}
         </main>
       </div>
     </>
@@ -744,43 +742,6 @@ function SessionAuditCard({ audit }: { audit: SessionAudit }) {
       <p className="text-[10px] text-slate-500 mt-1">
         ■ green = submitted &amp; valid · amber = missing from evidence · grey = recorded, not submitted · red = failing record
       </p>
-    </Card>
-  );
-}
-
-// ════════════════════════════════════════════════════════════════════════════
-// Explanation
-// ════════════════════════════════════════════════════════════════════════════
-
-function HowItWorks() {
-  return (
-    <Card title="Integrity protocol">
-      <div className="text-sm text-slate-300 space-y-3 max-w-3xl leading-relaxed">
-        <p>
-          <b>At capture (phone).</b> The dashcam cuts the recording into short, self-contained video segments. For each segment it
-          computes <code>segment_hash = SHA-256(file bytes)</code>, then a chain hash over the segment metadata and the previous chain
-          hash, <code>chain_hash = SHA-256(v1 | device | session | seq | times | frames | size | type | GPS | segment_hash | prev_chain_hash)</code>,
-          and signs <code>chain_hash</code> with an ECDSA P-256 private key that never leaves the phone.
-        </p>
-        <p>
-          <b>Anchoring (server).</b> The signed record is sent within seconds (or buffered offline and sent on reconnection). The
-          database stamps its own arrival time, and rows can only be inserted, never updated. The video itself stays on the phone
-          until the driver submits it after an incident.
-        </p>
-        <p>
-          <b>Verification (insurer).</b> The Decoder recomputes SHA-256 of each submitted file and looks it up. A match proves the
-          file is bit-for-bit what was recorded at that time: SHA-256 is collision-resistant and changing even one bit gives a
-          completely different hash. It then checks the signature (the record comes from the registered phone), recomputes the
-          chain hash (the record was not edited) and follows <code>prev_chain_hash</code> links (nothing was removed, inserted or
-          reordered). Missing sequence numbers inside the submitted range show that part of the timeline was withheld.
-        </p>
-        <p>
-          <b>Why not per-frame hashes?</b> Decoding a compressed video never gives back the exact pixels or JPEG bytes that were
-          hashed at capture (codec, seek precision, browser differences), so frame hashes cannot be matched reliably.
-          Hashing the exact file bytes is deterministic on every platform, which makes a mismatch an unambiguous proof of
-          modification.
-        </p>
-      </div>
     </Card>
   );
 }

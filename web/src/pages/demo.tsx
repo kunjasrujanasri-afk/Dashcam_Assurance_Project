@@ -115,8 +115,8 @@ export default function FraudDemoPage() {
       <div className="min-h-screen bg-slate-950 text-white">
         <TopNav
           icon="🕵️"
-          kicker="Insurance Fraud Detection"
-          title="Interactive Demo"
+          kicker="TAMPER EXPERIMENTS"
+          title="Integrity playground"
           href="/admin"
           hrefLabel="Decoder"
           right={
@@ -174,33 +174,13 @@ export default function FraudDemoPage() {
 function Overview({ onSelect }: { onSelect: (s: Scenario) => void }) {
   return (
     <div className="space-y-6">
-      <Card
-        title="How fraudsters try to exploit dashcam evidence"
-        subtitle="And how cryptographic fingerprinting catches every attempt"
-      >
-        <div className="text-sm text-slate-300 space-y-4 max-w-3xl leading-relaxed">
-          <p>
-            In insurance claims, dashcam video is critical evidence. Fraudsters use several techniques to
-            manipulate video before submitting it — hoping the insurer will accept their altered version of events.
-          </p>
-          <p>
-            Our system defeats all of these attacks because <strong>every video segment is fingerprinted at the
-            moment of recording</strong> using SHA-256 hashing, chained together in a tamper-evident sequence,
-            and signed with the device&apos;s private key. These fingerprints are anchored on the server within
-            seconds of capture — long before any fraud attempt.
-          </p>
-          <p className="text-indigo-300 font-semibold">
-            Select a scenario below to see a live, interactive demonstration.
-          </p>
-        </div>
-      </Card>
-
+      <p className="text-sm text-slate-400">Choose a scenario to compare original evidence with a modified copy.</p>
       <div className="grid md:grid-cols-3 gap-5">
         {SCENARIOS.map((s) => (
           <button
             key={s.key}
             onClick={() => onSelect(s.key)}
-            className="group text-left bg-slate-800/50 border border-slate-700/60 rounded-2xl p-5 hover:border-indigo-500/50 hover:bg-indigo-500/5 transition-all"
+            className="glass-card scenario-tile group text-left p-6 hover:border-indigo-500/50 hover:bg-indigo-500/5 transition-all"
           >
             <span className="text-3xl">{s.icon}</span>
             <h3 className="text-base font-semibold text-white mt-3 group-hover:text-indigo-300 transition-colors">
@@ -214,55 +194,6 @@ function Overview({ onSelect }: { onSelect: (s: Scenario) => void }) {
           </button>
         ))}
       </div>
-
-      <Card title="How the system protects against fraud" subtitle="End-to-end integrity at every stage">
-        <div className="grid md:grid-cols-2 gap-6 text-sm text-slate-300">
-          <div className="space-y-3">
-            <h4 className="font-semibold text-white flex items-center gap-2">
-              <span className="text-lg">📱</span> At Recording (Phone)
-            </h4>
-            <ul className="space-y-1.5 text-xs list-disc pl-5">
-              <li>Every segment is hashed (<code className="text-emerald-400">SHA-256</code>) immediately after recording</li>
-              <li>Hashes are chained: each segment references the previous hash</li>
-              <li>Each chain hash is signed with the device&apos;s ECDSA private key</li>
-              <li>Breaking one link breaks the entire chain from that point</li>
-            </ul>
-          </div>
-          <div className="space-y-3">
-            <h4 className="font-semibold text-white flex items-center gap-2">
-              <span className="text-lg">☁️</span> At Anchoring (Server)
-            </h4>
-            <ul className="space-y-1.5 text-xs list-disc pl-5">
-              <li>Hash records are transmitted in real-time (or buffered offline)</li>
-              <li>Server timestamps when each hash arrives (proof of existence)</li>
-              <li>Records are append-only — no updates or deletes allowed</li>
-              <li>Anchored hash becomes the ground truth for verification</li>
-            </ul>
-          </div>
-          <div className="space-y-3">
-            <h4 className="font-semibold text-white flex items-center gap-2">
-              <span className="text-lg">🛡️</span> At Verification (Insurer)
-            </h4>
-            <ul className="space-y-1.5 text-xs list-disc pl-5">
-              <li>SHA-256 of submitted file is recomputed and looked up on the server</li>
-              <li>Device signature and chain hash are validated</li>
-              <li>Sequence continuity is checked (no gaps allowed)</li>
-              <li>Any mismatch → <span className="text-red-400 font-semibold">TAMPERED</span> verdict</li>
-            </ul>
-          </div>
-          <div className="space-y-3">
-            <h4 className="font-semibold text-white flex items-center gap-2">
-              <span className="text-lg">❌</span> What Fraud Cannot Do
-            </h4>
-            <ul className="space-y-1.5 text-xs list-disc pl-5">
-              <li>Cannot edit a single byte without changing the SHA-256 hash</li>
-              <li>Cannot forge a signature without the device&apos;s private key</li>
-              <li>Cannot insert/delete segments without breaking chain links</li>
-              <li>Cannot hide gaps — the verifier checks sequence completeness</li>
-            </ul>
-          </div>
-        </div>
-      </Card>
     </div>
   );
 }

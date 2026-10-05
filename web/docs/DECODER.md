@@ -13,7 +13,8 @@ Web application used by the insurer to retrieve the recorded data and verify its
 | **Live monitor** | Loads the latest records and subscribes to Supabase Realtime. Every incoming record is checked on arrival (chain hash, device signature, link to the previous segment). Sessions are listed with their anchoring delay; **Audit chain** re-verifies a whole session stored on the server. **Run retention purge** removes expired hashes. |
 | **Verify evidence** | *Retrieve* the clips submitted by drivers from the Storage bucket `evidence` (or open files downloaded from the phone), *play* them, *verify* them, export the report as JSON. |
 | **Tamper lab** (in the same tab) | Creates modified copies in memory — flip 1 bit, overwrite 4 KB, truncate 20 %, swap file names, remove a segment — and simulates an altered server record, to demonstrate detection. |
-| **How verification works** | Explanation of the protocol inside the app. |
+
+The protocol explanation is maintained in the [root README](../../README.md) and below; the interface contains the Live monitor and Verify evidence tabs.
 
 ## 2. Integrity mechanism
 

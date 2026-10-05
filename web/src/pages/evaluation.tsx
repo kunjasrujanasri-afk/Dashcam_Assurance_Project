@@ -19,7 +19,7 @@
 import Head from "next/head";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Badge, Button, Card, TopNav } from "@/components/ui";
+import { Badge, Button, Card, Stat, TopNav } from "@/components/ui";
 import {
   aHash,
   buildFeatureVector,
@@ -469,8 +469,8 @@ export default function EvaluationPage() {
       <div className="min-h-screen bg-slate-950 text-white">
         <TopNav
           icon="📊"
-          kicker="Video Integrity Evaluation"
-          title="Test Suite Dashboard"
+          kicker="RESEARCH WORKSPACE"
+          title="Evaluation lab"
           href="/admin"
           hrefLabel="Decoder"
           right={<Link href="/demo" className="text-xs text-slate-400 hover:text-white whitespace-nowrap">Demo →</Link>}
@@ -489,7 +489,7 @@ export default function EvaluationPage() {
                 { key: "maxEuclidean", label: "Max L2", min: 0.1, max: 5, step: 0.1 },
               ].map(({ key, label, min, max, step }) => (
                 <div key={key}>
-                  <label className="text-xs text-slate-400 block mb-1">{label}</label>
+                  <label htmlFor={`threshold-${key}`} className="text-xs text-slate-400 block mb-1">{label}</label>
                   <input
                     id={`threshold-${key}`}
                     type="number"
@@ -519,10 +519,7 @@ export default function EvaluationPage() {
                 { label: "Missed Matches", value: summary.missedMatch, tone: "amber" as const },
                 { label: "Correct Detections", value: summary.correctDetect, tone: "green" as const },
               ].map(({ label, value, tone }) => (
-                <div key={label} className="bg-slate-900/60 border border-slate-700/60 rounded-xl p-3 text-center">
-                  <p className="text-[10px] uppercase tracking-wider text-slate-500 mb-1">{label}</p>
-                  <p className={`text-2xl font-bold font-mono ${tone === "green" ? "text-emerald-400" : tone === "red" ? "text-red-400" : tone === "amber" ? "text-amber-400" : tone === "sky" ? "text-sky-400" : "text-slate-300"}`}>{value}</p>
-                </div>
+                <Stat key={label} label={label} value={value} tone={tone} />
               ))}
             </div>
           )}
