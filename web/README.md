@@ -1,33 +1,89 @@
-# Dashcam Assurance
+> Reference implementation: [hoangtrietdev/video-fingerprint-app](https://github.com/hoangtrietdev/video-fingerprint-app) at `2320d470b2bedf5836de35c98d1c6cf6bfbf39fb`.
+>
+> Use a **separate Supabase project** and apply `web/supabase/schema.sql` there. The reference uses anonymous access and overlaps with the earlier secure tables and bucket. See [reference analysis](docs/REFERENCE_ANALYSIS.md) before setup. Existing cloud and browser data have not been migrated.
 
-A browser-based dashcam evidence workflow with local video capture, signed segment fingerprints, protected incident storage, and insurer verification.
+# Dashcam Integrity System — Encoder & Decoder
 
-## Secure workflow
+A smartphone used as a **dashcam** records the road, fingerprints every few seconds of video and
+anchors the fingerprints on a server; an **insurer** later retrieves the clip and proves, cryptographically,
+that it has not been modified, cut or forged.
 
-1. Configure Supabase Auth and the public project URL/key in the deployment environment (`SUPABASE_URL` and `SUPABASE_KEY`, or the corresponding `NEXT_PUBLIC_SUPABASE_*` publishable/anon variables). Never expose `SUPABASE_SECRET_KEY` or a service-role key to the browser.
-2. Apply every migration in `../supabase/migrations/` in filename order. The secure workflow and capture-upload migration create owner-bound session recovery, workspace policies, a private evidence bucket, and the video index table.
-3. Sign up or sign in. Each captured segment is signed and saved locally first. Its fingerprint and original video are then sent to the private workspace storage. The IndexedDB outbox retries both when a network outage interrupts delivery.
+| Component | Runs on | URL | Report |
+|---|---|---|---|
+| **Encoder / Transmitter** | driver's smartphone (mobile web app) | `/` | [docs/ENCODER.md](docs/ENCODER.md) |
+| **Decoder** | insurer's computer (web app) | `/admin` | [docs/DECODER.md](docs/DECODER.md) |
+| **Evaluation Dashboard** | any browser | `/evaluation` | [docs/EVALUATION.md](docs/EVALUATION.md) |
+| Installation / configuration / run (both) | | | [docs/SETUP.md](docs/SETUP.md) |
 
-The existing Vercel project can deploy this Next.js app from `web/`. Add the Supabase URL and **publishable/anon** key to the Vercel project environment, then redeploy. `SUPABASE_SECRET_KEY` may remain server-side for the legacy Streamlit application; the web app deliberately never returns it from `/api/config`.
 
-## Encoder / transmitter
-
-Camera-only recording is split into configurable segments. Each segment is SHA-256 hashed, linked to its session chain, signed with the browser device’s ECDSA P-256 key, and saved locally before transmission. The IndexedDB outbox retries both fingerprint and private video uploads without changing IDs or signatures. The driver can simulate an outage, lock an incident with pre/post-roll, manage its local cache, and download the original video for checking.
-
-## Decoder / insurer
-
-Authorized workspace members can inspect a live fingerprint stream, retrieve any uploaded video from private Supabase storage, compare an original video or a SHA-256 text list with database fingerprints, validate device signatures and complete session chains, and review/export audit and verification history. Video checks hash locally and use exact matching against the signed Supabase records. Similarity is a review lead only; it never turns an exact-integrity failure into a verified result. The evaluation lab supports pHash, aHash, dHash, wHash, threshold calibration, confusion metrics, and CSV export.
-
-## Development
+## Quick start
 
 ```bash
-npm install
-npm run dev
+npm ci
+# 1. create a Supabase project and run supabase/schema.sql in its SQL editor
+# 2. create .env.local:
+#    NEXT_PUBLIC_SUPABASE_URL=https://<ref>.supabase.co
+#    NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<anon key>
+npm run dev            # computer: http://localhost:3000 and /admin
+npm run dev:https      # phone on same Wi-Fi: https://<LAN-IP>:3000
+npm run selftest       # automated integrity tests
 ```
 
-Production checks:
+## How it works (one minute)
 
-```bash
-npm run lint
-npm run build
 ```
+PHONE (Encoder)                                   SERVER (Supabase)             INSURER (Decoder)
+camera → frames → canvas overlay → 5 s segments
+  segment_hash = SHA-256(file)
+  chain_hash   = SHA-256(record ‖ prev_chain_hash)  ── HTTPS ──►  video_segments   ◄── Realtime / queries
+  signature    = ECDSA-P256(device key, chain)      (outbox,      insert-only,
+video kept on phone (loop recording, retention)      retry)       server time
+incident → clip uploaded ───────────────────────────────────────► Storage "evidence" ──► retrieve + verify:
+                                                                                 hash · signature · chain · gaps
+```
+
+## Requirement coverage
+
+| Requirement | Where |
+|---|---|
+| Frame acquisition from the camera | `src/lib/recorder.ts` (`getUserMedia`, 15 fps frame grab) |
+| Video composition / processing | canvas overlay + `MediaRecorder` segments — `recorder.ts` |
+| Hash generation | SHA-256 + hash chain + ECDSA — `src/lib/integrity.ts` |
+| Dynamic transmission | outbox + transmitter — `src/lib/transmitter.ts`, Realtime on Decoder |
+| Network interruptions | persistent outbox, back-off, idempotent inserts, simulate button |
+| Deletion of expired data | loop recording `src/lib/retention.ts`; server purge `purge_expired_segments()` |
+| Integrity verification + detection | `src/lib/verifier.ts`, Decoder "Verify evidence" + tamper lab |
+| Perceptual hash metrics (aHash/dHash/pHash/wHash) | `src/lib/fingerprintMetrics.ts` |
+| Fuzzy hashing (ssdeep, TLSH) | `src/lib/fingerprintMetrics.ts` |
+| Vector metrics (L1, L2, cosine) | `src/lib/fingerprintMetrics.ts` |
+| Threshold evaluation (precision/recall/F1) | `src/lib/fingerprintMetrics.ts` + `/evaluation` |
+| Evaluation dashboard (all §1–§7 scenarios) | `src/pages/evaluation.tsx` — `/evaluation` |
+| Evaluation report | [docs/EVALUATION.md](docs/EVALUATION.md) |
+| Environment reproduction | `docs/SETUP.md` |
+
+## Project structure
+
+```
+supabase/schema.sql        tables, triggers (server time, immutability), RLS, purge, bucket, realtime
+src/lib/config.ts          tunable parameters
+src/lib/integrity.ts       protocol shared by both apps (SHA-256, canonical record, chain, ECDSA)
+src/lib/fingerprintMetrics.ts perceptual hashes, fuzzy hashes, vector metrics, threshold evaluation
+src/lib/recorder.ts        Encoder: camera → composition → segments → hash/sign → store
+src/lib/transmitter.ts     Encoder: store-and-forward hash transmission
+src/lib/retention.ts       Encoder: loop recording, incident lock
+src/lib/localStore.ts      Encoder: IndexedDB persistence
+src/lib/deviceIdentity.ts  Encoder: device id + non-extractable key pair
+src/lib/verifier.ts        Decoder: verification engine
+src/lib/repository.ts      Decoder: Supabase queries, evidence bucket
+src/lib/tamperLab.ts       Decoder: tampering simulations for the demo
+src/pages/index.tsx        Encoder UI
+src/pages/admin.tsx        Decoder UI
+src/pages/evaluation.tsx   Evaluation dashboard (§1–§7 scenarios + metrics + thresholds)
+scripts/selftest.ts        automated tests of the protocol and the verifier
+docs/EVALUATION.md         comprehensive evaluation report
+```
+
+## Open-source components
+
+Next.js, React, TypeScript, Tailwind CSS, Supabase (`@supabase/supabase-js`), tsx (tests).
+Cryptography uses only the browser-native Web Crypto API. Application logic is adapted from the reference repository linked above.
