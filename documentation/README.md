@@ -4,7 +4,7 @@ Dashcam Assurance is a coursework prototype with two interfaces:
 
 - **Encoder and transmitter:** the Streamlit application (`app.py`) captures a video from upload or browser camera, creates a SHA-256 digest for each decoded frame, writes local TXT evidence, and progressively sends fingerprint batches to Supabase.
 - **Decoder and evaluation lab:** the same application verifies frame digests against cloud or local TXT evidence, reports exact mismatches and sequence anomalies, compares perceptual hashes for temporal alignment, and runs reproducible evaluation scenarios.
-- **Browser capture demo:** `web/` contains the Next.js camera capture and Supabase viewer deployed to Vercel. It is a separate demonstration UI and does not replace the Streamlit encoder/decoder.
+- **Browser evidence console:** `web/` contains the Next.js camera capture and Supabase verification workflow deployed to Vercel. It is separate from the Streamlit frame-based prototype.
 
 ## Architecture and integrity model
 
@@ -20,11 +20,11 @@ The Streamlit encoder handles uploaded files and WebRTC camera recordings while 
 
 New fingerprints enter `database/transmission_queue.sqlite3` in batches while frame processing continues. SQLite uses a unique driver/video/frame identity, so duplicate enqueues are ignored. Failed Supabase reads or writes leave records on disk. The Capture page reports queue size and offers retry. On retry, the app checks existing cloud frame numbers before inserting queued records. Delivery is at-least-once with cloud-read deduplication, not a server-attested exactly-once protocol.
 
-The Streamlit queue is on the application host. The deployed browser capture page does not share this SQLite queue; browser users need a network connection when its fingerprint request is sent.
+The Streamlit queue is on the application host. The browser app instead uses an IndexedDB outbox and can record locally during a simulated or actual outage; session rows, fingerprints, and original segment videos retry after connectivity returns. The web app stores video in a private Supabase bucket and a workspace-scoped `evidence_recordings` table.
 
 ## Decoder and evidence sources
 
-Open **Insurance Verification**, choose **Supabase** or **Local TXT**, and select the evidence video. TXT files accept one 64-character SHA-256 digest per line and legacy `frame | hash | timestamp` records. Verification reports the selected source and can download a text report.
+The Streamlit **Insurance Verification** workflow can compare against Supabase or local TXT evidence. The Next.js decoder has one input for an original video or a TXT hash list: video checks are compared with signed workspace fingerprints, and TXT lists are compared with database SHA-256 values. TXT matches remain review-only because a text list alone does not prove ownership of a video.
 
 Cloud records are queried by driver ID and video name. Public access and row-level policy settings depend on the linked Supabase project's configuration. Do not enter sensitive personal information as a driver ID.
 
@@ -78,13 +78,13 @@ npm run dev
 
 Configure `SUPABASE_URL` and a publishable/anon key in the local Next/Vercel environment. Never use a service-role or secret key in browser-visible variables. Pushes to `main` trigger Vercel deployments.
 
-The browser page requests camera/microphone access only after **Start camera** is chosen. It records a WebM file in the active page, then locally samples and hashes it. Background/locked-screen continuous dashcam recording is outside a browser page's reliable capabilities.
+The browser page requests camera/microphone access only after **Start dashcam** is chosen. It records WebM segments while the page is active, hashes and signs each segment, saves a local cache copy, then uploads the signed fingerprint and video to a private workspace. Background/locked-screen continuous dashcam recording is outside a browser page's reliable capabilities. The Streamlit capture workflow remains frame-based and keeps its original video local.
 
 ## Supabase and retention
 
 The app expects a `public.fingerprints` table with `driver_id`, `frame_number`, `fingerprint`, `timestamp`, `video_name`, and `status` columns, plus an `id` and optionally `created_at`. The anon/publishable key must have the intended read/insert grants and RLS policies. Retention deletion targets only the selected expired record IDs in the Streamlit administration workflow.
 
-Use a dedicated Supabase project for assessment. The deployed browser demo is public and its anonymous policies may allow visitors to submit or query data; do not use it for real insurance evidence or personal data.
+The browser app requires Supabase Auth and uses workspace/device row-level policies. Captured WebM segments are stored in the private `evidence` bucket; its signing metadata and object path are indexed in workspace-scoped tables. Apply all SQL migrations before using camera capture or cloud verification. The public Vercel URL does not make Supabase evidence rows or objects public, but this coursework application has client-reported audit results and should not be represented as an insurer-certified system.
 
 ## Validation
 
@@ -107,9 +107,9 @@ npm run build
 
 ## Reference-informed scope and remaining limits
 
-The [CloudDash Integrity reference](https://github.com/asrieldev/clouddash-integrity) documents Supabase Auth and workspace roles, signed device metadata, chained capture sessions, IndexedDB persistence, private incident-video storage, and an authenticated insurer monitor. This repository has a Streamlit capture/decoder prototype, Supabase fingerprint storage, a local SQLite retry queue, a separate public Vercel camera demo, and reproducible local evaluation. It does **not** yet provide the reference's authentication/workspace model, device ECDSA signatures/hash chain, private incident-video locking/storage, realtime monitor, or server-attested audit history. Those features require schema, access-control, and device-key changes and are not represented as implemented.
+The [CloudDash Integrity reference](https://github.com/asrieldev/clouddash-integrity) documents workspace evidence workflows. The Next.js app now has Supabase Auth and workspace scoping, ECDSA-signed chained capture sessions, an IndexedDB retry queue, private video storage, a live monitor, incident workflows, and an evaluation lab. The separate Streamlit prototype remains frame-hash based and does not use the browser app's device keys or private video storage. Verification and audit outcomes are client-reported; they are not server-attested.
 
-The Streamlit camera works while its page is open; it is not an always-on native dashcam app. A demonstration video still needs to be recorded from the running application. TXT and SQLite evidence files are local artifacts and must be backed up separately.
+Both capture interfaces require their page to stay open while recording; neither is an always-on native dashcam app. The browser keeps a local cache and also uploads captured segments to private Supabase storage when online. Streamlit TXT and SQLite evidence files are local artifacts and must be backed up separately.
 
 ## Security note
 

@@ -6,7 +6,7 @@ export type LocalSegment = {
   id: string; sessionId: string; deviceId: string; workspaceId: string; sequence: number;
   capturedAt: string; blob: Blob; mimeType: string; fingerprint: SignedFingerprint;
   state: "LOCAL" | "QUEUED" | "SENDING" | "FAILED" | "SENT";
-  locked: boolean; incidentId: string | null; fingerprintId?: string; storagePath?: string;
+  locked: boolean; incidentId: string | null; fingerprintId?: string; storagePath?: string; recordingPath?: string;
   attempts: number; lastError?: string;
 };
 export type VerificationAttempt = { id: string; workspaceId: string; actorId: string; kind: string; status: string; name: string; details: Record<string, unknown>; createdAt: string };

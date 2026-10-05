@@ -2,10 +2,10 @@
 
 import { ChangeEvent, useCallback, useEffect, useMemo, useState } from "react";
 import type { SupabaseClient, User } from "@supabase/supabase-js";
-import { addLocalAttempt, getSegment, listLocalAttempts, listOutbox, listSegments, loadKeyPair, removeLocalAttempt, removeOutbox, updateOutbox, putSegment, type LocalSegment, type VerificationAttempt } from "@/lib/local-vault";
+import { addLocalAttempt, getSegment, listLocalAttempts, listOutbox, removeLocalAttempt, removeOutbox, updateOutbox, putSegment, type LocalSegment, type VerificationAttempt } from "@/lib/local-vault";
 import { alignVideos, confusion, hashMethodScores, type HashMethod } from "@/lib/video-matching";
-import { canonicalChainPayload, extractPerceptual, parseFingerprintFile, sha256, verifyChain, verifySignature, type SignedFingerprint } from "@/lib/signed-evidence";
-import { downloadProtectedSegment, ensureCaptureSession, fetchWorkspaceFingerprints, listIncidents, loadAuditEvents, loadVerificationHistory, logAuditEvent, logVerification, prepareIdentity, subscribeWorkspace, transmitFingerprint, uploadProtectedSegment } from "@/lib/secure-store";
+import { extractPerceptual, parseFingerprintFile, sha256, verifyChain, verifySignature, type SignedFingerprint } from "@/lib/signed-evidence";
+import { downloadProtectedSegment, ensureCaptureSession, fetchSessionFingerprints, fetchWorkspaceFingerprints, fetchWorkspaceRecordings, findFingerprintsByHashes, listIncidents, loadAuditEvents, loadVerificationHistory, logAuditEvent, logVerification, prepareIdentity, subscribeWorkspace, transmitFingerprint, uploadProtectedSegment, uploadRecordedSegment } from "@/lib/secure-store";
 
 type BaseProps = { client: SupabaseClient; user: User; workspaceId: string; notify: (message: string) => void };
 const fmt = (value: unknown) => value ? new Date(String(value)).toLocaleString() : "—";
@@ -26,7 +26,7 @@ function deviceKey(row: Record<string, unknown>): JsonWebKey | null {
 function saveFile(name: string, content: string, type = "application/json") {
   const url = URL.createObjectURL(new Blob([content], { type })), anchor = document.createElement("a"); anchor.href = url; anchor.download = name; anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
-function ResultBadge({ value }: { value: string }) { return <span className={`status-pill ${["VERIFIED", "VERIFIED_LOCAL", "MANIFEST_VERIFIED", "CONTENT_MATCH"].includes(value) ? "success" : value === "ERROR" ? "neutral" : "warning"}`}>{value}</span>; }
+function ResultBadge({ value }: { value: string }) { return <span className={`status-pill ${["VERIFIED", "VERIFIED_LOCAL"].includes(value) ? "success" : value === "ERROR" ? "neutral" : "warning"}`}>{value}</span>; }
 
 export function LiveMonitor({ client, workspaceId, notify }: BaseProps) {
   const [records, setRecords] = useState<Array<Record<string, unknown>>>([]), [incidents, setIncidents] = useState<Array<Record<string, unknown>>>([]), [state, setState] = useState("connecting"), [loading, setLoading] = useState(false);
@@ -48,158 +48,113 @@ export function LiveMonitor({ client, workspaceId, notify }: BaseProps) {
 }
 
 export function EvidenceDecoder({ client, user, workspaceId, notify }: BaseProps) {
-  const [references, setReferences] = useState<Array<Record<string, unknown>>>([]), [file, setFile] = useState<File | null>(null), [manifest, setManifest] = useState<File | null>(null), [textFile, setTextFile] = useState<File | null>(null), [referenceId, setReferenceId] = useState(""), [busy, setBusy] = useState(false), [progress, setProgress] = useState(0), [result, setResult] = useState<{ status: string; details: Record<string, unknown>; name: string } | null>(null), [incidents, setIncidents] = useState<Array<Record<string, unknown>>>([]);
+  const [references, setReferences] = useState<Array<Record<string, unknown>>>([]), [recordings, setRecordings] = useState<Array<Record<string, unknown>>>([]), [file, setFile] = useState<File | null>(null), [busy, setBusy] = useState(false), [progress, setProgress] = useState(0), [result, setResult] = useState<{ status: string; details: Record<string, unknown>; name: string } | null>(null);
   const refresh = useCallback(async () => {
-    try { const [rows, open] = await Promise.all([fetchWorkspaceFingerprints(client, workspaceId), listIncidents(client, workspaceId)]); setReferences(rows); setIncidents(open); setReferenceId(value => value && rows.some(row => row.segment_id === value) ? value : String(rows[0]?.segment_id ?? "")); }
+    try {
+      const rows = await fetchWorkspaceFingerprints(client, workspaceId); setReferences(rows);
+      try { setRecordings(await fetchWorkspaceRecordings(client, workspaceId)); }
+      catch { setRecordings([]); notify("Cloud video index is not ready. Apply the latest Supabase migrations to list uploaded recordings."); }
+    }
     catch (error) { notify(error instanceof Error ? error.message : "Could not load trusted references."); }
   }, [client, workspaceId, notify]);
   useEffect(() => { const timer = window.setTimeout(() => void refresh(), 0); return () => window.clearTimeout(timer); }, [refresh]);
-  const selectedReference = references.find(row => row.segment_id === referenceId) ?? null;
 
-
-  const persistAttempt = async (status: string, name: string, details: Record<string, unknown>) => {
+  const persistAttempt = async (kind: string, status: string, name: string, details: Record<string, unknown>) => {
     const id = crypto.randomUUID(), createdAt = new Date().toISOString();
-    const local: VerificationAttempt = { id, workspaceId, actorId: user.id, kind: "video", status, name, details: { ...details, attemptId: id }, createdAt };
+    const local: VerificationAttempt = { id, workspaceId, actorId: user.id, kind, status, name, details: { ...details, attemptId: id }, createdAt };
     await addLocalAttempt(local);
-    try { await logVerification(client, workspaceId, user.id, "video", status, name, { ...details, attemptId: id }); await removeLocalAttempt(id); }
+    try { await logVerification(client, workspaceId, user.id, kind, status, name, { ...details, attemptId: id }); await removeLocalAttempt(id); }
     catch { notify("The check is saved locally and will remain in your history while the cloud is unavailable."); }
   };
 
   const verify = async () => {
     if (!file) return;
     setBusy(true); setProgress(5); setResult(null);
+    const legacyList = file.name.toLowerCase().endsWith(".txt") || file.type === "text/plain";
+    const kind = legacyList ? "legacy-hash-list" : "video";
     let status = "ERROR", details: Record<string, unknown> = {};
     try {
-      const calculated = await sha256(file); setProgress(35);
-
-      type ParsedManifest = { manifestVersion?: number; devicePublicKey?: JsonWebKey; evidence?: SignedFingerprint };
-      let manifestValue: ParsedManifest | null = null;
-      if (manifest) {
-        try { manifestValue = JSON.parse(await manifest.text()) as ParsedManifest; }
-        catch { status = "INVALID_MANIFEST"; throw new Error("The selected JSON evidence manifest is malformed."); }
-        if (manifestValue?.manifestVersion !== 1 || !manifestValue.evidence?.segmentId) { status = "INVALID_MANIFEST"; throw new Error("The manifest version or segment identity is not supported."); }
-      }
-      const evidenceId = manifestValue?.evidence?.segmentId ?? referenceId;
-      const cloudRow = references.find(row => row.segment_id === evidenceId) ?? null;
-      if (!cloudRow && manifestValue?.evidence) {
-        const evidence = manifestValue.evidence;
-        const exactMatch = calculated === evidence.sha256 && file.size === evidence.bytes;
-        if (!exactMatch) {
-          status = "FILE_HASH_MISMATCH";
-          details = { calculatedHash: calculated, expectedHash: evidence.sha256, bytes: file.size, expectedBytes: evidence.bytes, segmentId: evidence.segmentId, trust: "manifest" };
+      if (legacyList) {
+        const parsed = parseFingerprintFile(await file.text()), found = await findFingerprintsByHashes(client, workspaceId, parsed.fingerprints);
+        status = found.length ? "LEGACY_MATCH_REVIEW" : parsed.fingerprints.length ? "FINGERPRINT_NOT_FOUND" : "INVALID_FINGERPRINT_FILE";
+        details = { hashCount: parsed.fingerprints.length, invalidLines: parsed.invalidLines, matchedRecords: found.map(row => ({ segmentId: row.segment_id, sessionId: row.session_id, sequence: row.sequence, sha256: row.sha256, capturedAt: row.captured_at })), matchCount: found.length, comparison: "uploaded SHA-256 list compared with workspace Supabase fingerprints" };
+      } else {
+        if (!file.type.startsWith("video/")) { status = "UNSUPPORTED_FILE_TYPE"; throw new Error("Choose a supported video file or a plain .txt file containing SHA-256 hashes."); }
+        const calculated = await sha256(file); setProgress(45);
+        const exactRows = await findFingerprintsByHashes(client, workspaceId, [calculated], file.size);
+        const cloudRow = exactRows[0] ?? null;
+        if (!cloudRow) {
+          status = "FINGERPRINT_NOT_FOUND";
+          details = { calculatedHash: calculated, bytes: file.size, comparison: "exact SHA-256 and byte count against workspace Supabase fingerprints" };
         } else {
-          const chainHashValid = await sha256(canonicalChainPayload(evidence)) === evidence.chainHash;
-          const local = await getSegment(evidence.segmentId);
-          const localKeys = await loadKeyPair(evidence.deviceId);
-          const publicKey = localKeys?.publicJwk ?? manifestValue.devicePublicKey;
-          const signatureValid = Boolean(publicKey && await verifySignature(evidence, publicKey));
-          const localBytesMatch = Boolean(local && local.blob.size === file.size && await sha256(local.blob) === calculated);
-          let localChainStatus: string | null = null;
-          if (local && localKeys && localBytesMatch) {
-            const sequence = (await listSegments(evidence.deviceId))
-              .filter(segment => segment.sessionId === evidence.sessionId && segment.sequence <= evidence.sequence)
-              .map(segment => segment.fingerprint);
-            const checkedChain = await verifyChain(sequence);
-            localChainStatus = checkedChain.valid && sequence.some(record => record.segmentId === evidence.segmentId) ? "VERIFIED" : checkedChain.status;
+          const trusted = fromRow(cloudRow), publicKey = deviceKey(cloudRow);
+          if (!publicKey || !(await verifySignature(trusted, publicKey))) status = "INVALID_SIGNATURE";
+          else {
+            const records = (await fetchSessionFingerprints(client, workspaceId, trusted.sessionId)).map(fromRow);
+            const chain = await verifyChain(records);
+            status = chain.valid ? "VERIFIED" : chain.status;
           }
-          if (!chainHashValid) status = "BROKEN_CHAIN";
-          else if (!signatureValid) status = "INVALID_SIGNATURE";
-          else if (local && !localBytesMatch) status = "FILE_HASH_MISMATCH";
-          else status = localChainStatus === "VERIFIED" ? "VERIFIED_LOCAL" : "MANIFEST_VERIFIED";
-          details = {
-            calculatedHash: calculated, expectedHash: evidence.sha256, bytes: file.size, expectedBytes: evidence.bytes,
-            segmentId: evidence.segmentId, sessionId: evidence.sessionId, sequence: evidence.sequence,
-            trust: localChainStatus === "VERIFIED" ? "local signed capture and complete session chain" : "self-contained signed manifest",
-            localCaptureFound: Boolean(local), localChainStatus,
-            limitation: localChainStatus === "VERIFIED" ? null : "No matching cloud fingerprint or complete local chain was available. The included public key validates the manifest signature but does not independently establish who issued that key.",
-          };
-        }
-      } else if (!cloudRow) { status = "FINGERPRINT_NOT_FOUND"; details = { calculatedHash: calculated, referenceSegment: evidenceId || null }; }
-      else {
-        const trusted = fromRow(cloudRow), publicKey = deviceKey(cloudRow) ?? manifestValue?.devicePublicKey ?? null;
-        const videoMatches = calculated === trusted.sha256 && file.size === trusted.bytes;
-        if (manifestValue?.evidence && (manifestValue.evidence.sha256 !== trusted.sha256 || manifestValue.evidence.chainHash !== trusted.chainHash || manifestValue.evidence.signature !== trusted.signature || manifestValue.evidence.sessionId !== trusted.sessionId || manifestValue.evidence.segmentId !== trusted.segmentId)) {
-          status = "INVALID_MANIFEST";
-        } else if (!videoMatches) status = "FILE_HASH_MISMATCH";
-        else if (!publicKey || !(await verifySignature(trusted, publicKey))) status = "INVALID_SIGNATURE";
-        else {
-          const records = references.filter(row => row.session_id === trusted.sessionId).map(fromRow);
-          const chain = await verifyChain(records);
-          status = chain.valid ? "VERIFIED" : chain.status;
-        }
-        details = { calculatedHash: calculated, expectedHash: trusted.sha256, bytes: file.size, expectedBytes: trusted.bytes, segmentId: trusted.segmentId, sessionId: trusted.sessionId, sequence: trusted.sequence };
-        if (status === "FILE_HASH_MISMATCH" && trusted.perceptual.frames.length) {
-          setProgress(48);
-          try {
-            const perceptual = await extractPerceptual(file);
-            const matched = alignVideos(perceptual, trusted.perceptual, { minimumCoverage: 0.45 });
-            details.visualComparison = { status: matched.status, score: matched.score, matchedPercentage: matched.matchedPercentage, anomalies: matched.anomalies, sections: matched.sections };
-            if (matched.match) status = "CONTENT_MATCH";
-          } catch (error) { details.visualComparisonError = error instanceof Error ? error.message : "Perceptual comparison could not decode the submitted file."; }
+          details = { calculatedHash: calculated, expectedHash: trusted.sha256, bytes: file.size, expectedBytes: trusted.bytes, segmentId: trusted.segmentId, sessionId: trusted.sessionId, sequence: trusted.sequence, deviceId: trusted.deviceId, matchCount: exactRows.length, comparison: "exact SHA-256, byte count, registered device signature, and Supabase session chain" };
         }
       }
-      if (textFile) {
-        const parsed = parseFingerprintFile(await textFile.text());
-        details.legacyText = { filename: textFile.name, hashCount: parsed.fingerprints.length, invalidLines: parsed.invalidLines };
-        if (parsed.fingerprints.includes(calculated) && status === "FINGERPRINT_NOT_FOUND") status = "LEGACY_MATCH_REVIEW";
-      }
-      setProgress(90); await persistAttempt(status, file.name, details); setResult({ status, details, name: file.name });
-      if (["VERIFIED", "VERIFIED_LOCAL", "MANIFEST_VERIFIED", "FILE_HASH_MISMATCH", "CONTENT_MATCH", "INVALID_SIGNATURE", "BROKEN_CHAIN", "MISSING_SEQUENCE", "SESSION_MISMATCH", "DEVICE_MISMATCH", "FINGERPRINT_NOT_FOUND", "INVALID_MANIFEST", "LEGACY_MATCH_REVIEW"].includes(status)) {
-        await logAuditEvent(client, workspaceId, user.id, "video_verification", file.name, { status, segmentId: details.segmentId ?? null });
+      setProgress(90); await persistAttempt(kind, status, file.name, details); setResult({ status, details, name: file.name });
+      if (["VERIFIED", "VERIFIED_LOCAL", "MANIFEST_VERIFIED", "FILE_HASH_MISMATCH", "CONTENT_MATCH", "INVALID_SIGNATURE", "BROKEN_CHAIN", "MISSING_SEQUENCE", "SESSION_MISMATCH", "DEVICE_MISMATCH", "FINGERPRINT_NOT_FOUND", "INVALID_MANIFEST", "LEGACY_MATCH_REVIEW", "INVALID_FINGERPRINT_FILE", "UNSUPPORTED_FILE_TYPE"].includes(status)) {
+        await logAuditEvent(client, workspaceId, user.id, legacyList ? "legacy_hash_list_comparison" : "video_verification", file.name, { status, segmentId: details.segmentId ?? null });
       }
     } catch (error) {
       if (status === "ERROR") status = "ERROR";
       details = { ...details, error: error instanceof Error ? error.message : "Verification could not finish." };
-      await persistAttempt(status, file.name, details).catch(() => undefined);
+      await persistAttempt(kind, status, file.name, details).catch(() => undefined);
       setResult({ status, details, name: file.name });
     } finally { setProgress(100); setBusy(false); }
   };
 
-  const downloadManifest = () => {
-    if (!selectedReference) return;
-    const record = fromRow(selectedReference), key = deviceKey(selectedReference);
-    if (!key) { notify("This evidence record has no registered device public key."); return; }
-    saveFile(`evidence-${record.segmentId}.json`, JSON.stringify({ manifestVersion: 1, devicePublicKey: key, evidence: record }, null, 2));
-  };
-  const protectedVideos: Array<Record<string, unknown>> = incidents.flatMap(incident => ((incident.incident_videos as Array<Record<string, unknown>> | undefined) ?? []).map(video => ({ ...video, incidentTitle: incident.title })));
   const retrieveProtected = async (row: Record<string, unknown>) => {
     try {
-      const blob = await downloadProtectedSegment(client, String(row.storage_path)); if (!blob) throw new Error("The private incident object returned no data.");
-      const digest = await sha256(blob), trusted = references.find(item => item.segment_id === row.segment_id);
-      const status = trusted && digest === trusted.sha256 && blob.size === Number(trusted.bytes) ? "VERIFIED" : "STORAGE_OBJECT_MISMATCH";
-      const local = new File([blob], `incident-${String(row.segment_id)}.webm`, { type: String(row.mime_type || "video/webm") }); setFile(local); setReferenceId(String(row.segment_id));
-      await persistAttempt(status, local.name, { storagePath: row.storage_path, calculatedHash: digest, segmentId: row.segment_id });
-      setResult({ status, name: local.name, details: { storagePath: row.storage_path, calculatedHash: digest, expectedHash: trusted?.sha256 } });
-    } catch (error) { notify(error instanceof Error ? error.message : "Could not retrieve the protected incident video."); }
+      const blob = await downloadProtectedSegment(client, String(row.storage_path)); if (!blob) throw new Error("The private Supabase video returned no data.");
+      const digest = await sha256(blob), trusted = references.find(item => item.segment_id === row.segment_id) ?? (await findFingerprintsByHashes(client, workspaceId, [String(row.sha256)], Number(row.bytes))).find(item => item.segment_id === row.segment_id);
+      let status = "STORAGE_OBJECT_MISMATCH";
+      if (trusted && digest === trusted.sha256 && blob.size === Number(trusted.bytes)) {
+        const fingerprint = fromRow(trusted), key = deviceKey(trusted), session = (await fetchSessionFingerprints(client, workspaceId, fingerprint.sessionId)).map(fromRow);
+        if (!key || !(await verifySignature(fingerprint, key))) status = "INVALID_SIGNATURE";
+        else { const chain = await verifyChain(session); status = chain.valid ? "VERIFIED" : chain.status; }
+      }
+      const local = new File([blob], `dashcam-${String(row.segment_id)}.webm`, { type: String(row.mime_type || "video/webm") }); setFile(local);
+      const details = { storagePath: row.storage_path, calculatedHash: digest, expectedHash: trusted?.sha256, bytes: blob.size, segmentId: row.segment_id, verificationReference: "Supabase evidence fingerprint" };
+      await persistAttempt("video", status, local.name, details);
+      setResult({ status, name: local.name, details });
+    } catch (error) { notify(error instanceof Error ? error.message : "Could not retrieve the Supabase video."); }
   };
 
-  return <div className="module-stack"><div className="module-title"><div><p className="eyebrow">DECODER / INSURER</p><h1>Verify evidence</h1><p>Check original bytes, signed device identity, session sequence, and matching video sections.</p></div><div className="button-row compact"><button className="button button-neutral" onClick={() => void refresh()}>Refresh stream</button><button className="button button-primary" onClick={downloadManifest} disabled={!selectedReference}>Download manifest</button></div></div>
+  return <div className="module-stack"><div className="module-title"><div><p className="eyebrow">DECODER / INSURER</p><h1>Verify evidence</h1><p>Compare an original recording or SHA-256 text list with signed Supabase evidence.</p></div><div className="button-row compact"><button className="button button-neutral" onClick={() => void refresh()}>Refresh database</button></div></div>
     <div className="metric-grid metric-grid-wide"><article className="metric-card"><span className="metric-icon mint">✓</span><div><span>Cloud fingerprints</span><b>{references.length.toLocaleString()}</b><small>Trusted session-bound records</small></div></article><article className="metric-card"><span className="metric-icon blush">⌁</span><div><span>Realtime stream</span><b>Scoped</b><small>Authorized workspace only</small></div></article><article className="metric-card"><span className="metric-icon gold">♢</span><div><span>Last verification</span><b>{result?.status ?? "—"}</b><small>{result?.name ?? "No file checked"}</small></div></article></div>
-    <section className="panel decoder-panel"><p className="eyebrow">VIDEO VERIFICATION</p><h2>Verify a downloaded video</h2><p>Choose the exact trusted segment or its signed JSON manifest. Hashing remains on this device; the video is never uploaded for verification.</p>
-      <div className="settings-grid decoder-settings"><label>Trusted cloud segment<select value={referenceId} onChange={event => setReferenceId(event.target.value)}><option value="">Select a trusted segment…</option>{references.map(row => <option value={String(row.segment_id)} key={String(row.segment_id)}>Seq {String(row.sequence)} · {String(row.device_id).slice(0, 8)}… · {fmt(row.captured_at)}</option>)}</select></label><label>Open video file<input type="file" accept="video/mp4,video/webm,video/quicktime,video/*" onChange={(event: ChangeEvent<HTMLInputElement>) => setFile(event.target.files?.[0] ?? null)} /></label><label>Signed evidence manifest (.json)<input type="file" accept=".json,application/json" onChange={event => setManifest(event.target.files?.[0] ?? null)} /></label><label>Legacy SHA-256 list (.txt)<input type="file" accept=".txt,text/plain" onChange={event => setTextFile(event.target.files?.[0] ?? null)} /></label></div>
+    <section className="panel decoder-panel"><p className="eyebrow">DATABASE COMPARISON</p><h2>Check one evidence file</h2><p>Select a video for exact byte and signature verification, or a SHA-256 text list to compare listed hashes with this workspace’s Supabase records. The selected file is hashed in your browser and is not uploaded again.</p>
+      <div className="settings-grid decoder-settings single-evidence-input"><label>Choose one video or .txt hash list<input type="file" accept="video/*,.txt,text/plain" onChange={(event: ChangeEvent<HTMLInputElement>) => { setFile(event.target.files?.[0] ?? null); setResult(null); }} /></label></div>
       {file && <div className="file-summary"><b>{file.name}</b><span>{bytes(file.size)}</span></div>}
       {busy && <div className="progress-wrap"><div><span>Hashing and checking chain</span><span>{progress}%</span></div><div className="progress-track"><i style={{ width: `${progress}%` }} /></div></div>}
-      <button className="button button-primary" onClick={() => void verify()} disabled={!file || busy}>{busy ? "Verifying…" : "Verify exact integrity"}</button>
-      {result && <section className={`verification-result ${["VERIFIED", "VERIFIED_LOCAL", "MANIFEST_VERIFIED"].includes(result.status) ? "verified" : result.status === "CONTENT_MATCH" ? "review" : "failed"}`}><div className="panel-heading"><div><p className="eyebrow">RESULT · {result.name}</p><h3>{result.status}</h3></div><ResultBadge value={result.status} /></div><p>{resultExplanation(result.status)}</p><details><summary>Technical details</summary><pre>{JSON.stringify(result.details, null, 2)}</pre></details></section>}
+      <button className="button button-primary" onClick={() => void verify()} disabled={!file || busy}>{busy ? "Comparing…" : file?.name.toLowerCase().endsWith(".txt") ? "Compare hash list" : "Verify against database"}</button>
+      {result && <section className={`verification-result ${["VERIFIED", "VERIFIED_LOCAL"].includes(result.status) ? "verified" : ["CONTENT_MATCH", "MANIFEST_VERIFIED"].includes(result.status) ? "review" : "failed"}`}><div className="panel-heading"><div><p className="eyebrow">RESULT · {result.name}</p><h3>{result.status}</h3></div><ResultBadge value={result.status} /></div><p>{resultExplanation(result.status)}</p><details><summary>Technical details</summary><pre>{JSON.stringify(result.details, null, 2)}</pre></details></section>}
     </section>
-    <section className="panel"><div className="panel-heading"><div><h2>Protected incident videos</h2><p>Authorized workspace members can retrieve, replay, and verify privately stored incident clips.</p></div></div><div className="table-scroll"><table><thead><tr><th>Incident</th><th>Segment</th><th>Size</th><th>Protected object</th><th></th></tr></thead><tbody>{protectedVideos.map(row => <tr key={String(row.id)}><td>{String(row.incidentTitle)}</td><td>{String(row.sequence)}</td><td>{bytes(Number(row.bytes))}</td><td><code>{String(row.storage_path)}</code></td><td><button className="text-action" onClick={() => void retrieveProtected(row)}>Retrieve &amp; verify</button></td></tr>)}{!protectedVideos.length && <tr><td colSpan={5} className="empty-state">No protected video is stored. Lock an incident in Driver capture to preserve clips here.</td></tr>}</tbody></table></div></section>
+    <section className="panel"><div className="panel-heading"><div><h2>Videos stored in Supabase <span>({recordings.length})</span></h2><p>Private uploaded copies are checked against their signed database fingerprint when retrieved.</p></div></div><div className="table-scroll"><table><thead><tr><th>Uploaded</th><th>Session / segment</th><th>Size</th><th>SHA-256</th><th>Cloud object</th><th></th></tr></thead><tbody>{recordings.map(row => <tr key={String(row.id)}><td>{fmt(row.uploaded_at)}</td><td><code>{String(row.session_id).slice(0, 8)}… / {String(row.segment_id).slice(0, 8)}…</code></td><td>{bytes(Number(row.bytes))}</td><td><code>{String(row.sha256).slice(0, 14)}…</code></td><td><code>{String(row.storage_path)}</code></td><td><button className="text-action" onClick={() => void retrieveProtected(row)}>Download &amp; verify</button></td></tr>)}{!recordings.length && <tr><td colSpan={6} className="empty-state">Captured video uploads will appear after signed fingerprints are acknowledged.</td></tr>}</tbody></table></div></section>
   </div>;
 }
 
 function resultExplanation(status: string) {
   const copy: Record<string, string> = {
-    VERIFIED: "Exact file bytes match a trusted cloud fingerprint. The device signature and complete ordered session hash chain are valid.",
+    VERIFIED: "Exact file bytes match a trusted cloud fingerprint. The registered device signature and complete ordered Supabase session hash chain are valid.",
     VERIFIED_LOCAL: "Exact file bytes, the saved device signature, and the complete local session chain match. No cloud fingerprint was available for this check.",
     MANIFEST_VERIFIED: "The video digest, chain hash, and signature match the supplied manifest. Without a cloud record or complete local capture chain, the manifest’s included public key is not an independent identity anchor.",
     FILE_HASH_MISMATCH: "The supplied file differs byte-for-byte from the trusted recording. Perceptual similarity cannot make it authentic.",
     CONTENT_MATCH: "Some visual frames align with the trusted video, but the file hash differs. This is a review lead, not a verified result.",
-    FINGERPRINT_NOT_FOUND: "No matching trusted cloud fingerprint was found. The file cannot be authenticated from this workspace.",
+    FINGERPRINT_NOT_FOUND: "No matching SHA-256 record was found in this Supabase workspace.",
+    LEGACY_MATCH_REVIEW: "One or more hashes in this text list match signed Supabase fingerprints. A hash list is a comparison aid and does not authenticate a video by itself.",
+    INVALID_FINGERPRINT_FILE: "No valid SHA-256 values were found in this text file. Choose a plain text list containing 64-character SHA-256 hashes.",
     INVALID_SIGNATURE: "The device signature does not verify against the registered device public key.",
     BROKEN_CHAIN: "A chain hash or previous-hash link failed. The session sequence cannot be trusted.",
     MISSING_SEQUENCE: "The trusted stream is missing one or more segments before this evidence item.",
     SESSION_MISMATCH: "The fingerprint sequence spans more than one capture session.",
     INVALID_MANIFEST: "The supplied manifest is malformed or its identity fields differ from the trusted cloud row.",
-    LEGACY_MATCH_REVIEW: "A legacy TXT digest matches, but it has no signed session identity or chain. Manual review is required.",
+    UNSUPPORTED_FILE_TYPE: "Choose a video file or a plain text file containing SHA-256 hashes.",
     STORAGE_OBJECT_MISMATCH: "The protected storage object does not match its trusted exact-file fingerprint.",
     ERROR: "The check could not finish. This processing error is kept separate from integrity failures.",
   };
@@ -255,9 +210,13 @@ export function IngestionQueue({ client, user, workspaceId, notify }: BaseProps)
           if (error) throw error;
           const fingerprintId = existing ? existing.id as string : await transmitFingerprint(client, item.fingerprint);
           if (existing && (existing.sha256 !== item.fingerprint.sha256 || existing.chain_hash !== item.fingerprint.chainHash)) throw new Error("Evidence ID conflict: queued data differs from the server record.");
-          let updated: LocalSegment = { ...record, fingerprintId, state: "SENT" };
+          let updated: LocalSegment = { ...record, fingerprintId, state: "SENDING" };
+          await putSegment(updated);
+          const cloudVideo = await uploadRecordedSegment(client, updated);
+          updated = { ...updated, recordingPath: cloudVideo.storage_path };
           await putSegment(updated);
           if (record.locked && record.incidentId) { const uploaded = await uploadProtectedSegment(client, updated, record.incidentId); updated = { ...updated, storagePath: String(uploaded?.storage_path ?? "") }; await putSegment(updated); }
+          await putSegment({ ...updated, state: "SENT" });
           await removeOutbox(item.id); sent++;
         } catch (error) { const message = error instanceof Error ? error.message : "Retry failed"; await putSegment({ ...record, state: "FAILED", attempts: item.attempts + 1, lastError: message }); await updateOutbox(item.id, { lastError: message }); }
       }
@@ -267,7 +226,7 @@ export function IngestionQueue({ client, user, workspaceId, notify }: BaseProps)
     finally { setWorking(false); await refresh(); }
   };
   const total = rows.reduce((sum, item) => sum + Number(item.fingerprint.bytes || 0), 0);
-  return <div className="module-stack"><div className="module-title"><div><p className="eyebrow">OPERATIONS</p><h1>Ingestion queue</h1><p>Persistent local write-ahead records wait here until the cloud confirms delivery.</p></div><button className="button button-primary" onClick={() => void retry()} disabled={working || !rows.length}>{working ? "Retrying…" : "Retry outbox"}</button></div><div className="metric-grid"><article className="metric-card"><span className="metric-icon gold">↗</span><div><span>Queued fingerprints</span><b>{rows.length}</b><small>Across capture sessions</small></div></article><article className="metric-card"><span className="metric-icon blush">▤</span><div><span>Pending metadata</span><b>{bytes(total)}</b><small>Original videos remain local</small></div></article><article className="metric-card"><span className="metric-icon lavender">◈</span><div><span>Device</span><b>{identity ? identity.slice(0, 8) : "—"}</b><small>Original signatures are preserved</small></div></article></div><section className="panel"><div className="table-scroll"><table><thead><tr><th>Queued</th><th>Session / sequence</th><th>Segment</th><th>State</th><th>Attempts</th><th>Last error</th></tr></thead><tbody>{rows.map(row => <tr key={row.id}><td>{fmt(row.queuedAt)}</td><td><code>{row.fingerprint.sessionId.slice(0, 8)}… / {row.fingerprint.sequence}</code></td><td><code>{row.fingerprint.segmentId.slice(0, 14)}…</code></td><td><ResultBadge value={row.lastError ? "FAILED" : "QUEUED"} /></td><td>{row.attempts}</td><td>{row.lastError || "Waiting for a retry."}</td></tr>)}{!rows.length && <tr><td colSpan={6} className="empty-state">The device outbox is empty.</td></tr>}</tbody></table></div></section></div>;
+  return <div className="module-stack"><div className="module-title"><div><p className="eyebrow">OPERATIONS</p><h1>Ingestion queue</h1><p>Local fingerprints and original videos wait here until Supabase confirms both uploads.</p></div><button className="button button-primary" onClick={() => void retry()} disabled={working || !rows.length}>{working ? "Retrying…" : "Retry outbox"}</button></div><div className="metric-grid"><article className="metric-card"><span className="metric-icon gold">↗</span><div><span>Queued segments</span><b>{rows.length}</b><small>Across capture sessions</small></div></article><article className="metric-card"><span className="metric-icon blush">▤</span><div><span>Pending video size</span><b>{bytes(total)}</b><small>Original video awaits upload</small></div></article><article className="metric-card"><span className="metric-icon lavender">◈</span><div><span>Device</span><b>{identity ? identity.slice(0, 8) : "—"}</b><small>Signatures stay unchanged on retry</small></div></article></div><section className="panel"><div className="table-scroll"><table><thead><tr><th>Queued</th><th>Session / sequence</th><th>Segment</th><th>State</th><th>Attempts</th><th>Last error</th></tr></thead><tbody>{rows.map(row => <tr key={row.id}><td>{fmt(row.queuedAt)}</td><td><code>{row.fingerprint.sessionId.slice(0, 8)}… / {row.fingerprint.sequence}</code></td><td><code>{row.fingerprint.segmentId.slice(0, 14)}…</code></td><td><ResultBadge value={row.lastError ? "FAILED" : "QUEUED"} /></td><td>{row.attempts}</td><td>{row.lastError || "Waiting for a retry."}</td></tr>)}{!rows.length && <tr><td colSpan={6} className="empty-state">The device outbox is empty.</td></tr>}</tbody></table></div></section></div>;
 }
 
 export function EvaluationLab({ notify }: { notify: (message: string) => void }) {
@@ -326,9 +285,9 @@ export function SettingsPanel({ client, user, workspaceId, notify }: BaseProps) 
   const addMember = async () => { setBusy(true); try { const { error } = await client.from("workspace_members").upsert({ workspace_id: workspaceId, user_id: memberId.trim(), role }, { onConflict: "workspace_id,user_id" }); if (error) throw error; setMemberId(""); await refresh(); notify("Workspace role updated."); } catch (error) { notify(error instanceof Error ? error.message : "Could not update membership."); } finally { setBusy(false); } };
   const removeMember = async (id: string) => { if (id === user.id || !window.confirm("Remove this member from the workspace?")) return; const { error } = await client.from("workspace_members").delete().eq("workspace_id", workspaceId).eq("user_id", id); if (error) notify(error.message); else await refresh(); };
   const currentRole = members.find(row => row.user_id === user.id)?.role;
-  return <div className="module-stack"><div className="module-title"><div><p className="eyebrow">WORKSPACE</p><h1>Settings</h1><p>Manage profile, trusted browser signing device, and workspace roles.</p></div></div><section className="panel"><h2>My profile</h2><div className="settings-grid"><label>Display name<input value={profile} onChange={event => setProfile(event.target.value)} maxLength={100} /></label><label>Account email<input value={user.email ?? ""} disabled /></label><label>Workspace role<input value={String(currentRole ?? "member")} disabled /></label><label>Workspace ID<input value={workspaceId} readOnly /></label></div><button className="button button-primary" onClick={() => void saveProfile()} disabled={busy}>Save profile</button></section><section className="panel"><h2>Workspace members</h2><p>Add a confirmed Supabase Auth user by their account UUID. Workspace RLS still enforces each assigned role.</p><div className="member-add"><label>User UUID<input value={memberId} onChange={event => setMemberId(event.target.value)} placeholder="Supabase Auth user ID" /></label><label>Role<select value={role} onChange={event => setRole(event.target.value)}><option value="driver">Driver</option><option value="analyst">Analyst</option><option value="viewer">Viewer</option><option value="admin">Admin</option></select></label><button className="button button-primary" onClick={() => void addMember()} disabled={busy || currentRole !== "admin" || !memberId.trim()}>Add member</button></div><div className="table-scroll"><table><thead><tr><th>Member</th><th>User ID</th><th>Role</th><th></th></tr></thead><tbody>{members.map(row => <tr key={String(row.user_id)}><td>{String((row.profiles as { display_name?: string } | null)?.display_name ?? "Workspace member")}</td><td><code>{String(row.user_id)}</code></td><td>{String(row.role)}</td><td><button className="text-action" disabled={currentRole !== "admin" || row.user_id === user.id} onClick={() => void removeMember(String(row.user_id))}>Remove</button></td></tr>)}</tbody></table></div></section><section className="panel"><h2>Device key and data boundaries</h2><ul><li>ECDSA P-256 private keys are non-exported Web Crypto keys stored in this browser’s IndexedDB.</li><li>The matching public key is stored with the workspace device record.</li><li>Normal video is local-only; the private evidence bucket receives only incident clips you explicitly lock.</li><li>Browser site data removal also removes local videos, signing keys, and any unsynced outbox entries. Export important files before clearing browser storage.</li></ul></section></div>;
+  return <div className="module-stack"><div className="module-title"><div><p className="eyebrow">WORKSPACE</p><h1>Settings</h1><p>Manage profile, trusted browser signing device, and workspace roles.</p></div></div><section className="panel"><h2>My profile</h2><div className="settings-grid"><label>Display name<input value={profile} onChange={event => setProfile(event.target.value)} maxLength={100} /></label><label>Account email<input value={user.email ?? ""} disabled /></label><label>Workspace role<input value={String(currentRole ?? "member")} disabled /></label><label>Workspace ID<input value={workspaceId} readOnly /></label></div><button className="button button-primary" onClick={() => void saveProfile()} disabled={busy}>Save profile</button></section><section className="panel"><h2>Workspace members</h2><p>Add a confirmed Supabase Auth user by their account UUID. Workspace RLS still enforces each assigned role.</p><div className="member-add"><label>User UUID<input value={memberId} onChange={event => setMemberId(event.target.value)} placeholder="Supabase Auth user ID" /></label><label>Role<select value={role} onChange={event => setRole(event.target.value)}><option value="driver">Driver</option><option value="analyst">Analyst</option><option value="viewer">Viewer</option><option value="admin">Admin</option></select></label><button className="button button-primary" onClick={() => void addMember()} disabled={busy || currentRole !== "admin" || !memberId.trim()}>Add member</button></div><div className="table-scroll"><table><thead><tr><th>Member</th><th>User ID</th><th>Role</th><th></th></tr></thead><tbody>{members.map(row => <tr key={String(row.user_id)}><td>{String((row.profiles as { display_name?: string } | null)?.display_name ?? "Workspace member")}</td><td><code>{String(row.user_id)}</code></td><td>{String(row.role)}</td><td><button className="text-action" disabled={currentRole !== "admin" || row.user_id === user.id} onClick={() => void removeMember(String(row.user_id))}>Remove</button></td></tr>)}</tbody></table></div></section><section className="panel"><h2>Device key and data boundaries</h2><ul><li>ECDSA P-256 private keys are non-exported Web Crypto keys stored in this browser’s IndexedDB.</li><li>The matching public key is stored with the workspace device record.</li><li>Signed fingerprints and matching video copies are stored in the workspace’s private Supabase evidence bucket; local cache copies follow the selected retention period.</li><li>Browser site data removal also removes local videos, signing keys, and any unsynced outbox entries. It does not remove acknowledged cloud recordings.</li></ul></section></div>;
 }
 
 export function DocumentationPanel() {
-  return <div className="module-stack"><div className="module-title"><div><p className="eyebrow">HELP &amp; SECURITY MODEL</p><h1>Documentation</h1><p>Quick operating guide for evidence capture and verification.</p></div></div><section className="panel"><h2>Encoder workflow</h2><ol><li>Sign in and open Driver capture. Grant camera access, or choose the synthetic road simulation.</li><li>Choose segment length, local retention, and incident pre/post-roll windows, then start dashcam.</li><li>Segments are hashed over original encoded bytes, linked into a session hash chain, signed by the browser device key, and saved to IndexedDB before upload.</li><li>Use Simulate network loss, capture a segment, then restore uplink or retry the ingestion queue. Retries preserve the original segment identity and signature.</li><li>Lock an incident to protect its before/current/after window. Only locked clips are uploaded to the private evidence bucket.</li><li>Download the original WebM and signed JSON manifest for the Decoder.</li></ol><h2>Decoder workflow</h2><ol><li>Select the matching trusted cloud segment or its signed JSON manifest and open the downloaded original video.</li><li>VERIFIED requires byte-for-byte SHA-256 equality, the cloud reference, a valid device signature, and a complete session chain.</li><li>Changed or re-encoded files fail exact verification. Temporal/perceptual similarity can suggest matching footage but never establishes authenticity.</li><li>Legacy TXT hashes are accepted for comparison and remain clearly labeled review-only because they do not bind a signed session.</li><li>Protected incident videos can be retrieved by authorized workspace members; their bytes are checked against the same trusted fingerprint.</li></ol><h2>Data boundaries</h2><p>Supabase Auth and row-level security scope cloud evidence by workspace. Normal driving video remains in the browser’s IndexedDB and is removed after the configured retention period, except for queued or locked clips. Verification attempts and audit events are client-reported records, not server-attested verdicts.</p></section></div>;
+  return <div className="module-stack"><div className="module-title"><div><p className="eyebrow">HELP &amp; SECURITY MODEL</p><h1>Documentation</h1><p>Quick operating guide for evidence capture and verification.</p></div></div><section className="panel"><h2>Encoder workflow</h2><ol><li>Sign in and open Driver capture. Grant camera access to record original road video.</li><li>Choose segment length, local cache retention, and incident pre/post-roll windows, then start dashcam.</li><li>Each segment is hashed over original encoded bytes, linked into a session chain, signed by the browser device key, and written to IndexedDB before upload.</li><li>Use Simulate network loss to test the durable outbox. Restore uplink or retry; session, fingerprint, and private video uploads resume with the same IDs and signatures.</li><li>Every acknowledged segment video is stored in the private Supabase evidence bucket. Incident locking associates a chosen clip window with an incident.</li><li>Download a video to check it later or use the single verification input with a video or a legacy SHA-256 TXT list.</li></ol><h2>Decoder workflow</h2><ol><li>Choose one video or TXT file. Videos are hashed locally and matched against Supabase SHA-256, byte count, registered device signature, and complete session chain.</li><li>A TXT file is compared with the workspace fingerprint list. A hash-list hit is labeled review-only; it does not prove possession of a matching video.</li><li>Changed or re-encoded video bytes do not pass exact verification.</li><li>Videos already in Supabase can be retrieved from the private recordings list and checked against their associated trusted fingerprint.</li></ol><h2>Data boundaries</h2><p>Supabase Auth and row-level security scope metadata and uploaded video by workspace and registered device ownership. Camera video remains in the local IndexedDB cache according to the selected retention period and is also uploaded to private Supabase storage after its fingerprint is acknowledged. Verification attempts and audit events are client-reported records, not server-attested verdicts.</p></section></div>;
 }
